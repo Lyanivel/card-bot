@@ -102,6 +102,16 @@ async def user_owns_card(user_id, card_id):
             card_id
         )
 
+async def get_user_cards(user_id):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT cards.name
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE user_id=$1
+        """, user_id)
+
+    return list(set([row["name"] for row in rows]))
 
 async def trade_cards(u1, c1, u2, c2):
     async with db_pool.acquire() as conn:
@@ -125,6 +135,14 @@ async def trade_cards(u1, c1, u2, c2):
 
             return True, "Trade completed!"
 
+async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_user_cards(interaction.user.id)
+
+    return [
+        app_commands.Choice(name=card, value=card)
+        for card in cards
+        if current.lower() in card.lower()
+    ][:25]
 
 # ---------------- AUTO DROP ----------------
 
@@ -191,6 +209,34 @@ class ClaimView(discord.ui.View):
             view=self
         )
 
+class TradeView(discord.ui.View):
+    def __init__(self, requester, target, requester_card, target_card):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.target = target
+        self.requester_card = requester_card
+        self.target_card = target_card
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.target.id:
+            return await interaction.response.send_message("Not your trade.", ephemeral=True)
+
+        success, msg = await trade_cards(
+            self.requester.id,
+            self.requester_card["id"],
+            self.target.id,
+            self.target_card["id"]
+        )
+
+        await interaction.response.edit_message(content=msg, view=None)
+
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.target.id:
+            return await interaction.response.send_message("Not your trade.", ephemeral=True)
+
+        await interaction.response.edit_message(content="Trade declined.", view=None)
 
 # ---------------- BOT ----------------
 
@@ -270,6 +316,55 @@ async def inventory(interaction, user: discord.Member = None):
 
     await interaction.response.send_message(text or "Empty")
 
+@bot.tree.command(name="trade", description="Trade cards with another user")
+@app_commands.describe(
+    user="Trade with",
+    your_card="Card you're offering",
+    their_card="Card you want"
+)
+@app_commands.autocomplete(your_card=your_cards_autocomplete)
+async def trade(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    your_card: str,
+    their_card: str
+):
+    if user.bot:
+        return await interaction.response.send_message("Cannot trade with bots.", ephemeral=True)
+
+    if user.id == interaction.user.id:
+        return await interaction.response.send_message("You cannot trade yourself.", ephemeral=True)
+
+    your_card_data = await get_card_by_name(your_card)
+    their_card_data = await get_card_by_name(their_card)
+
+    if not your_card_data or not their_card_data:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+
+    if not await user_owns_card(interaction.user.id, your_card_data["id"]):
+        return await interaction.response.send_message(
+            f"You do not own **{your_card_data['name']}**.",
+            ephemeral=True
+        )
+
+    if not await user_owns_card(user.id, their_card_data["id"]):
+        return await interaction.response.send_message(
+            f"{user.display_name} does not own **{their_card_data['name']}**.",
+            ephemeral=True
+        )
+
+    view = TradeView(interaction.user, user, your_card_data, their_card_data)
+
+    embed = discord.Embed(
+        title="Trade Request",
+        description=(
+            f"{interaction.user.mention} offers **{your_card_data['name']}**\n"
+            f"in exchange for **{their_card_data['name']}** from {user.mention}"
+        ),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="addcard")
 async def addcard(interaction, name: str, rarity: str, image: str):
