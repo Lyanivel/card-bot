@@ -144,6 +144,15 @@ async def your_cards_autocomplete(interaction: discord.Interaction, current: str
         if current.lower() in card.lower()
     ][:25]
 
+async def all_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_all_cards()
+
+    return [
+        app_commands.Choice(name=card["name"], value=card["name"])
+        for card in cards
+        if current.lower() in card["name"].lower()
+    ][:25]
+
 # ---------------- AUTO DROP ----------------
 
 async def choose_random_card():
@@ -322,7 +331,10 @@ async def inventory(interaction, user: discord.Member = None):
     your_card="Card you're offering",
     their_card="Card you want"
 )
-@app_commands.autocomplete(your_card=your_cards_autocomplete)
+@app_commands.autocomplete(
+    your_card=your_cards_autocomplete,
+    their_card=all_cards_autocomplete
+)
 async def trade(
     interaction: discord.Interaction,
     user: discord.Member,
