@@ -288,7 +288,7 @@ class ClaimView(discord.ui.View):
             if now - last_claim_times[uid] < CLAIM_COOLDOWN:
                 remaining = int(CLAIM_COOLDOWN - (now - last_claim_times[uid]))
                 await interaction.response.send_message(
-                    f"⏳ You are on cooldown. Try again in {remaining}s.",
+                    f"â³ You are on cooldown. Try again in {remaining}s.",
                     ephemeral=True
                 )
                 return
@@ -409,7 +409,7 @@ class RemoveCardView(discord.ui.View):
 
         await interaction.response.edit_message(
             content=(
-                f"✅ **{self.card['name']}** has been removed from future drops and card lists.\n"
+                f"â **{self.card['name']}** has been removed from future drops and card lists.\n"
                 f"Members who already own it will keep it in their inventories."
             ),
             embed=None,
@@ -464,11 +464,11 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Online!")
 
 
-@bot.tree.command(name="card", description="View a specific card.")
-@app_commands.describe(name="Card name")
-@app_commands.autocomplete(name=all_active_cards_autocomplete)
-async def card(interaction: discord.Interaction, name: str):
-    c = await get_card_by_name(name)
+@bot.tree.command(name="viewcard", description="View a specific card.")
+@app_commands.describe(card_name="Choose a card to view")
+@app_commands.autocomplete(card_name=all_active_cards_autocomplete)
+async def viewcard(interaction: discord.Interaction, card_name: str):
+    c = await get_card_by_name(card_name)
     if not c:
         return await interaction.response.send_message("Not found.", ephemeral=True)
 
@@ -500,7 +500,7 @@ async def cards(interaction: discord.Interaction):
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for name in grouped[rarity]:
-                text += f"• {name}\n"
+                text += f"â¢ {name}\n"
             text += "\n"
 
     embed = discord.Embed(
@@ -533,7 +533,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
 
     for r in rows:
         limited_note = "" if r["is_active"] else " *(unobtainable)*"
-        text += f"{r['rarity']} • {r['name']} x{r['amount']}{limited_note}\n"
+        text += f"{r['rarity']} â¢ {r['name']} x{r['amount']}{limited_note}\n"
 
     embed = discord.Embed(
         title=f"{user.display_name}'s Inventory",
@@ -644,7 +644,7 @@ async def addcard(
             )
 
             return await interaction.response.send_message(
-                f"✅ Reactivated/updated **{name}** as a **{rarity.value}** card."
+                f"â Reactivated/updated **{name}** as a **{rarity.value}** card."
             )
 
         await conn.execute(
@@ -654,7 +654,7 @@ async def addcard(
             image
         )
 
-    await interaction.response.send_message(f"✅ Added **{name}** as a **{rarity.value}** card.")
+    await interaction.response.send_message(f"â Added **{name}** as a **{rarity.value}** card.")
 
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
