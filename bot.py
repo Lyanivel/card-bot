@@ -156,7 +156,7 @@ def format_coins(amount: int):
 
 
 def card_label(card):
-    return f"ID #{card['id']} • {card['rarity']} • {card['name']}"
+    return f"ID: {card['id']} — {card['name']} ({card['rarity']})"
 
 
 def clean_card_ref(card_ref: str):
@@ -166,7 +166,7 @@ def clean_card_ref(card_ref: str):
 def create_card_embed(card):
     embed = discord.Embed(
         title=f"{card['rarity']} Card Drop!",
-        description=f"**{card['name']}** appeared!\n`ID #{card['id']}`",
+        description=f"**{card['name']}** appeared!\n`ID: {card['id']}`",
         color=get_color(card["rarity"])
     )
     embed.set_image(url=card["image"])
@@ -186,7 +186,7 @@ async def log_removed_card(interaction: discord.Interaction, card):
         title="Card Removed From Future Drops",
         description=(
             f"**Card:** {card['name']}\n"
-            f"**ID:** #{card['id']}\n"
+            f"**ID:** {card['id']}\n"
             f"**Rarity:** {card['rarity']}\n"
             f"**Removed by:** {interaction.user.mention}\n\n"
             f"Members who already own this card will keep it."
@@ -626,7 +626,7 @@ class ClaimView(discord.ui.View):
         await add_card_to_inventory(uid, self.card["id"])
 
         await interaction.response.edit_message(
-            content=f"{interaction.user.mention} claimed **{self.card['name']}**! `ID #{self.card['id']}`",
+            content=f"{interaction.user.mention} claimed **{self.card['name']}**! `ID: {self.card['id']}`",
             view=self
         )
 
@@ -731,7 +731,7 @@ class RemoveCardView(discord.ui.View):
 
         await interaction.response.edit_message(
             content=(
-                f"**{self.card['name']}** `ID #{self.card['id']}` has been removed from future drops and card lists.\n"
+                f"**{self.card['name']}** `ID: {self.card['id']}` has been removed from future drops and card lists.\n"
                 f"Members who already own it will keep it in their inventories."
             ),
             embed=None,
@@ -924,7 +924,7 @@ async def sell(interaction: discord.Interaction, card: str):
         )
 
     await interaction.response.send_message(
-        f"You sold **{card_entry['name']}** `ID #{card_entry['card_id']}` ({card_entry['rarity']}) for **{format_coins(value)}**."
+        f"You sold **{card_entry['name']}** `ID: {card_entry['card_id']}` ({card_entry['rarity']}) for **{format_coins(value)}**."
     )
 
 
@@ -1016,7 +1016,7 @@ async def viewcard(interaction: discord.Interaction, card: str):
     embed = discord.Embed(
         title=c["name"],
         description=(
-            f"**ID:** #{c['id']}\n"
+            f"**ID:** {c['id']}\n"
             f"**Rarity:** {c['rarity']}\n"
             f"**Status:** {active_text}"
         ),
@@ -1045,7 +1045,7 @@ async def cards(interaction: discord.Interaction):
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for card in grouped[rarity]:
-                text += f"• ID #{card['id']} — {card['name']}\n"
+                text += f"• ID: {card['id']} — {card['name']} ({card['rarity']})\n"
             text += "\n"
 
     embed = discord.Embed(
@@ -1079,7 +1079,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"{r['rarity']} • ID #{r['id']} — {r['name']} x{r['amount']}{limited_note}\n"
+            text += f"ID: {r['id']} — {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
 
     embed = discord.Embed(
         title=f"{user.display_name}'s Inventory",
@@ -1141,8 +1141,8 @@ async def trade(
     embed = discord.Embed(
         title="Trade Request",
         description=(
-            f"{interaction.user.mention} offers **{your_card_data['name']}** `ID #{your_card_data['id']}`\n"
-            f"in exchange for **{their_card_data['name']}** `ID #{their_card_data['id']}` from {user.mention}\n\n"
+            f"{interaction.user.mention} offers **{your_card_data['name']}** `ID: {your_card_data['id']}`\n"
+            f"in exchange for **{their_card_data['name']}** `ID: {their_card_data['id']}` from {user.mention}\n\n"
             f"{user.mention}, accept or decline this trade."
         ),
         color=discord.Color.from_str("#9e659d")
@@ -1190,7 +1190,7 @@ async def addcard(
             )
 
             return await interaction.response.send_message(
-                f"Reactivated/updated **{name}** as a **{rarity.value}** card. `ID #{existing_card['id']}`"
+                f"Reactivated/updated **{name}** as a **{rarity.value}** card. `ID: {existing_card['id']}`"
             )
 
         new_id = await conn.fetchval(
@@ -1200,7 +1200,7 @@ async def addcard(
             image
         )
 
-    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `ID #{new_id}`")
+    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `ID: {new_id}`")
 
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
@@ -1278,7 +1278,7 @@ async def removecard(interaction: discord.Interaction, card_name: str):
     embed = discord.Embed(
         title="Confirm Card Removal",
         description=(
-            f"Are you sure you want to remove **{card['name']}** `ID #{card['id']}` from future drops and card lists?\n\n"
+            f"Are you sure you want to remove **{card['name']}** `ID: {card['id']}` from future drops and card lists?\n\n"
             f"Members who already own it will **keep it**."
         ),
         color=discord.Color.red()
