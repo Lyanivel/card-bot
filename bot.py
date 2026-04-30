@@ -31,10 +31,39 @@ AUTO_DROP_MINUTES = 30
 AUTO_DROP_CHANCE = 40
 
 CLAIM_COOLDOWN = 30
+DAILY_COOLDOWN = 24 * 60 * 60
+WEEKLY_COOLDOWN = 7 * 24 * 60 * 60
+
+DAILY_MIN = 75
+DAILY_MAX = 175
+
+WEEKLY_MIN = 500
+WEEKLY_MAX = 900
+
+CURRENCY_EMOJI = "<:sancs:1499174670568788018>"
+
+SELL_VALUES = {
+    "Common": 25,
+    "Rare": 75,
+    "Epic": 175,
+    "Legendary": 400,
+}
+
+SHOP_ITEMS = {
+    "smallbox": {
+        "name": "Small Prize Box",
+        "price": 500,
+        "description": "A simple prize box for future event rewards."
+    },
+    "bigbox": {
+        "name": "Big Prize Box",
+        "price": 1500,
+        "description": "A bigger prize box for future event rewards."
+    },
+}
+
 last_claim_times = {}
-
 active_trade_card_ids = set()
-
 db_pool = None
 
 
@@ -70,6 +99,33 @@ async def setup_database():
             );
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS balances (
+                user_id BIGINT PRIMARY KEY,
+                balance BIGINT NOT NULL DEFAULT 0
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS cooldowns (
+                user_id BIGINT NOT NULL,
+                command_name TEXT NOT NULL,
+                last_used BIGINT NOT NULL,
+                PRIMARY KEY (user_id, command_name)
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS purchases (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                item_key TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                price BIGINT NOT NULL,
+                purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
 
 # ---------------- HELPERS ----------------
 
@@ -84,6 +140,10 @@ def get_color(rarity):
         "Epic": discord.Color.from_str("#9e659d"),
         "Legendary": discord.Color.from_str("#f5c542"),
     }.get(rarity, discord.Color.blurple())
+
+
+def format_coins(amount: int):
+    return f"{amount:,} {CURRENCY_EMOJI}"
 
 
 def create_card_embed(card):
@@ -181,6 +241,19 @@ async def get_user_active_cards(user_id):
     return [row["name"] for row in rows]
 
 
+async def get_user_owned_cards_for_sell(user_id):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT DISTINCT cards.name
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE inventory.user_id=$1
+            ORDER BY cards.name
+        """, user_id)
+
+    return [row["name"] for row in rows]
+
+
 async def trade_cards(u1, c1, u2, c2):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -204,10 +277,164 @@ async def trade_cards(u1, c1, u2, c2):
             return True, "Trade completed!"
 
 
+# ---------------- CURRENCY FUNCTIONS ----------------
+
+async def get_balance(user_id):
+    async with db_pool.acquire() as conn:
+        balance = await conn.fetchval(
+            "SELECT balance FROM balances WHERE user_id=$1",
+            user_id
+        )
+
+        if balance is None:
+            await conn.execute(
+                "INSERT INTO balances (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+            return 0
+
+        return balance
+
+
+async def add_balance(user_id, amount):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO balances (user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET balance = balances.balance + $2
+        """, user_id, amount)
+
+
+async def subtract_balance(user_id, amount):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            balance = await conn.fetchval(
+                "SELECT balance FROM balances WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+
+            if balance is None:
+                balance = 0
+                await conn.execute(
+                    "INSERT INTO balances (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+                    user_id
+                )
+
+            if balance < amount:
+                return False
+
+            await conn.execute(
+                "UPDATE balances SET balance = balance - $1 WHERE user_id=$2",
+                amount,
+                user_id
+            )
+
+            return True
+
+
+async def transfer_balance(sender_id, receiver_id, amount):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            sender_balance = await conn.fetchval(
+                "SELECT balance FROM balances WHERE user_id=$1 FOR UPDATE",
+                sender_id
+            )
+
+            if sender_balance is None:
+                sender_balance = 0
+                await conn.execute(
+                    "INSERT INTO balances (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+                    sender_id
+                )
+
+            if sender_balance < amount:
+                return False
+
+            await conn.execute(
+                "UPDATE balances SET balance = balance - $1 WHERE user_id=$2",
+                amount,
+                sender_id
+            )
+
+            await conn.execute("""
+                INSERT INTO balances (user_id, balance)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id)
+                DO UPDATE SET balance = balances.balance + $2
+            """, receiver_id, amount)
+
+            return True
+
+
+async def get_cooldown(user_id, command_name):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT last_used FROM cooldowns WHERE user_id=$1 AND command_name=$2",
+            user_id,
+            command_name
+        )
+
+
+async def set_cooldown(user_id, command_name):
+    now = int(time.time())
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO cooldowns (user_id, command_name, last_used)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, command_name)
+            DO UPDATE SET last_used=$3
+        """, user_id, command_name, now)
+
+
+async def sell_one_card(user_id, card_name):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            card_entry = await conn.fetchrow("""
+                SELECT inventory.id AS inventory_id, cards.name, cards.rarity
+                FROM inventory
+                JOIN cards ON cards.id = inventory.card_id
+                WHERE inventory.user_id=$1
+                AND LOWER(cards.name)=LOWER($2)
+                LIMIT 1
+                FOR UPDATE
+            """, user_id, card_name)
+
+            if not card_entry:
+                return False, None, 0
+
+            value = SELL_VALUES.get(card_entry["rarity"], 10)
+
+            await conn.execute(
+                "DELETE FROM inventory WHERE id=$1",
+                card_entry["inventory_id"]
+            )
+
+            await conn.execute("""
+                INSERT INTO balances (user_id, balance)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id)
+                DO UPDATE SET balance = balances.balance + $2
+            """, user_id, value)
+
+            return True, card_entry, value
+
+
 # ---------------- AUTOCOMPLETE ----------------
 
 async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
     cards = await get_user_active_cards(interaction.user.id)
+
+    return [
+        app_commands.Choice(name=card, value=card)
+        for card in cards
+        if current.lower() in card.lower()
+    ][:25]
+
+
+async def sell_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_user_owned_cards_for_sell(interaction.user.id)
 
     return [
         app_commands.Choice(name=card, value=card)
@@ -223,6 +450,14 @@ async def all_active_cards_autocomplete(interaction: discord.Interaction, curren
         app_commands.Choice(name=card["name"], value=card["name"])
         for card in cards
         if current.lower() in card["name"].lower()
+    ][:25]
+
+
+async def shop_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=item["name"], value=key)
+        for key, item in SHOP_ITEMS.items()
+        if current.lower() in item["name"].lower() or current.lower() in key.lower()
     ][:25]
 
 
@@ -288,7 +523,7 @@ class ClaimView(discord.ui.View):
             if now - last_claim_times[uid] < CLAIM_COOLDOWN:
                 remaining = int(CLAIM_COOLDOWN - (now - last_claim_times[uid]))
                 await interaction.response.send_message(
-                    f"â³ You are on cooldown. Try again in {remaining}s.",
+                    f"You are on cooldown. Try again in {remaining}s.",
                     ephemeral=True
                 )
                 return
@@ -409,7 +644,7 @@ class RemoveCardView(discord.ui.View):
 
         await interaction.response.edit_message(
             content=(
-                f"â **{self.card['name']}** has been removed from future drops and card lists.\n"
+                f"**{self.card['name']}** has been removed from future drops and card lists.\n"
                 f"Members who already own it will keep it in their inventories."
             ),
             embed=None,
@@ -464,6 +699,211 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Online!")
 
 
+@bot.tree.command(name="balance", description="View your balance or another user's balance.")
+@app_commands.describe(user="Choose whose balance to view")
+async def balance(interaction: discord.Interaction, user: discord.Member = None):
+    target = user or interaction.user
+    bal = await get_balance(target.id)
+
+    embed = discord.Embed(
+        title=f"{target.display_name}'s Balance",
+        description=f"**Balance:** {format_coins(bal)}",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="daily", description="Claim your daily currency reward.")
+async def daily(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    now = int(time.time())
+    last_used = await get_cooldown(user_id, "daily")
+
+    if last_used and now - last_used < DAILY_COOLDOWN:
+        remaining = DAILY_COOLDOWN - (now - last_used)
+        hours = remaining // 3600
+        minutes = (remaining % 3600) // 60
+
+        return await interaction.response.send_message(
+            f"You already claimed your daily. Try again in {hours}h {minutes}m.",
+            ephemeral=True
+        )
+
+    amount = random.randint(DAILY_MIN, DAILY_MAX)
+    await add_balance(user_id, amount)
+    await set_cooldown(user_id, "daily")
+
+    await interaction.response.send_message(
+        f"{interaction.user.mention} claimed their daily and received **{format_coins(amount)}**!"
+    )
+
+
+@bot.tree.command(name="weekly", description="Claim your weekly currency reward.")
+async def weekly(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    now = int(time.time())
+    last_used = await get_cooldown(user_id, "weekly")
+
+    if last_used and now - last_used < WEEKLY_COOLDOWN:
+        remaining = WEEKLY_COOLDOWN - (now - last_used)
+        days = remaining // 86400
+        hours = (remaining % 86400) // 3600
+
+        return await interaction.response.send_message(
+            f"You already claimed your weekly. Try again in {days}d {hours}h.",
+            ephemeral=True
+        )
+
+    amount = random.randint(WEEKLY_MIN, WEEKLY_MAX)
+    await add_balance(user_id, amount)
+    await set_cooldown(user_id, "weekly")
+
+    await interaction.response.send_message(
+        f"{interaction.user.mention} claimed their weekly reward and received **{format_coins(amount)}** + a **Prize Box**!"
+    )
+
+
+@bot.tree.command(name="givecurrency", description="Give some of your currency to another user.")
+@app_commands.describe(
+    user="User to give currency to",
+    amount="Amount to give"
+)
+async def givecurrency(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if user.bot:
+        return await interaction.response.send_message("You cannot give currency to a bot.", ephemeral=True)
+
+    if user.id == interaction.user.id:
+        return await interaction.response.send_message("You cannot give currency to yourself.", ephemeral=True)
+
+    if amount <= 0:
+        return await interaction.response.send_message("Amount must be greater than 0.", ephemeral=True)
+
+    success = await transfer_balance(interaction.user.id, user.id, amount)
+
+    if not success:
+        return await interaction.response.send_message(
+            "You do not have enough currency.",
+            ephemeral=True
+        )
+
+    await interaction.response.send_message(
+        f"{interaction.user.mention} gave {user.mention} **{format_coins(amount)}**."
+    )
+
+
+@bot.tree.command(name="addbal", description="Staff only: add currency to a user's balance.")
+@app_commands.describe(
+    user="User to add balance to",
+    amount="Amount to add"
+)
+async def addbal(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not is_staff(interaction.user):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    if amount <= 0:
+        return await interaction.response.send_message("Amount must be greater than 0.", ephemeral=True)
+
+    await add_balance(user.id, amount)
+
+    await interaction.response.send_message(
+        f"Added **{format_coins(amount)}** to {user.mention}'s balance."
+    )
+
+
+@bot.tree.command(name="sell", description="Sell one of your cards for currency.")
+@app_commands.describe(card_name="Choose the card to sell")
+@app_commands.autocomplete(card_name=sell_cards_autocomplete)
+async def sell(interaction: discord.Interaction, card_name: str):
+    success, card_entry, value = await sell_one_card(interaction.user.id, card_name)
+
+    if not success:
+        return await interaction.response.send_message(
+            "You do not own that card.",
+            ephemeral=True
+        )
+
+    await interaction.response.send_message(
+        f"You sold **{card_entry['name']}** ({card_entry['rarity']}) for **{format_coins(value)}**."
+    )
+
+
+@bot.tree.command(name="leaderboard", description="View the richest users.")
+async def leaderboard(interaction: discord.Interaction):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT user_id, balance
+            FROM balances
+            ORDER BY balance DESC
+            LIMIT 10
+        """)
+
+    if not rows:
+        return await interaction.response.send_message("No balances yet.")
+
+    text = ""
+
+    for index, row in enumerate(rows, start=1):
+        member = interaction.guild.get_member(row["user_id"]) if interaction.guild else None
+        name = member.display_name if member else f"User {row['user_id']}"
+        text += f"**{index}.** {name} — {format_coins(row['balance'])}\n"
+
+    embed = discord.Embed(
+        title="Currency Leaderboard",
+        description=text,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="shop", description="View the currency shop.")
+async def shop(interaction: discord.Interaction):
+    text = ""
+
+    for key, item in SHOP_ITEMS.items():
+        text += (
+            f"**{item['name']}** (`{key}`)\n"
+            f"Price: {format_coins(item['price'])}\n"
+            f"{item['description']}\n\n"
+        )
+
+    embed = discord.Embed(
+        title="Shop",
+        description=text or "The shop is currently empty.",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="buy", description="Buy an item from the shop.")
+@app_commands.describe(item="Choose an item to buy")
+@app_commands.autocomplete(item=shop_autocomplete)
+async def buy(interaction: discord.Interaction, item: str):
+    if item not in SHOP_ITEMS:
+        return await interaction.response.send_message("That shop item does not exist.", ephemeral=True)
+
+    shop_item = SHOP_ITEMS[item]
+    success = await subtract_balance(interaction.user.id, shop_item["price"])
+
+    if not success:
+        return await interaction.response.send_message(
+            f"You do not have enough currency. This costs **{format_coins(shop_item['price'])}**.",
+            ephemeral=True
+        )
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO purchases (user_id, item_key, item_name, price)
+            VALUES ($1, $2, $3, $4)
+        """, interaction.user.id, item, shop_item["name"], shop_item["price"])
+
+    await interaction.response.send_message(
+        f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
+    )
+
+
 @bot.tree.command(name="viewcard", description="View a specific card.")
 @app_commands.describe(card_name="Choose a card to view")
 @app_commands.autocomplete(card_name=all_active_cards_autocomplete)
@@ -500,7 +940,7 @@ async def cards(interaction: discord.Interaction):
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for name in grouped[rarity]:
-                text += f"â¢ {name}\n"
+                text += f"• {name}\n"
             text += "\n"
 
     embed = discord.Embed(
@@ -515,6 +955,7 @@ async def cards(interaction: discord.Interaction):
 @bot.tree.command(name="inventory", description="View your inventory or another user's inventory.")
 async def inventory(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
+    bal = await get_balance(user.id)
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -526,14 +967,14 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
             ORDER BY cards.rarity, cards.name
         """, user.id)
 
+    text = f"**Balance:** {format_coins(bal)}\n\n"
+
     if not rows:
-        return await interaction.response.send_message("Empty")
-
-    text = ""
-
-    for r in rows:
-        limited_note = "" if r["is_active"] else " *(unobtainable)*"
-        text += f"{r['rarity']} â¢ {r['name']} x{r['amount']}{limited_note}\n"
+        text += "No cards yet."
+    else:
+        for r in rows:
+            limited_note = "" if r["is_active"] else " *(unobtainable)*"
+            text += f"{r['rarity']} • {r['name']} x{r['amount']}{limited_note}\n"
 
     embed = discord.Embed(
         title=f"{user.display_name}'s Inventory",
@@ -644,7 +1085,7 @@ async def addcard(
             )
 
             return await interaction.response.send_message(
-                f"â Reactivated/updated **{name}** as a **{rarity.value}** card."
+                f"Reactivated/updated **{name}** as a **{rarity.value}** card."
             )
 
         await conn.execute(
@@ -654,7 +1095,7 @@ async def addcard(
             image
         )
 
-    await interaction.response.send_message(f"â Added **{name}** as a **{rarity.value}** card.")
+    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card.")
 
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
