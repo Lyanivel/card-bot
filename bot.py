@@ -31,11 +31,12 @@ AUTO_DROP_MINUTES = 30
 AUTO_DROP_CHANCE = 40
 
 CLAIM_COOLDOWN = 30
-DAILY_COOLDOWN = 24 * 60 * 60
 WEEKLY_COOLDOWN = 7 * 24 * 60 * 60
 
 DAILY_MIN = 75
 DAILY_MAX = 175
+DAILY_STREAK_BONUS_EVERY = 10
+DAILY_STREAK_BONUS_AMOUNT = 500
 
 WEEKLY_MIN = 500
 WEEKLY_MAX = 900
@@ -116,6 +117,14 @@ async def setup_database():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_streaks (
+                user_id BIGINT PRIMARY KEY,
+                streak_count INTEGER NOT NULL DEFAULT 0,
+                last_claim_day BIGINT
+            );
+        """)
+
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS purchases (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
@@ -143,13 +152,21 @@ def get_color(rarity):
 
 
 def format_coins(amount: int):
-    return f"{amount:,} {CURRENCY_EMOJI}"
+    return f"{CURRENCY_EMOJI} {amount:,}"
+
+
+def card_label(card):
+    return f"ID #{card['id']} • {card['rarity']} • {card['name']}"
+
+
+def clean_card_ref(card_ref: str):
+    return card_ref.strip().replace("#", "").replace("ID", "").replace("id", "").strip()
 
 
 def create_card_embed(card):
     embed = discord.Embed(
         title=f"{card['rarity']} Card Drop!",
-        description=f"**{card['name']}** appeared!",
+        description=f"**{card['name']}** appeared!\n`ID #{card['id']}`",
         color=get_color(card["rarity"])
     )
     embed.set_image(url=card["image"])
@@ -169,6 +186,7 @@ async def log_removed_card(interaction: discord.Interaction, card):
         title="Card Removed From Future Drops",
         description=(
             f"**Card:** {card['name']}\n"
+            f"**ID:** #{card['id']}\n"
             f"**Rarity:** {card['rarity']}\n"
             f"**Removed by:** {interaction.user.mention}\n\n"
             f"Members who already own this card will keep it."
@@ -189,23 +207,50 @@ async def get_card_by_name(name):
         )
 
 
-async def get_active_card_by_name(name):
+async def get_card_by_id(card_id):
     async with db_pool.acquire() as conn:
         return await conn.fetchrow(
+            "SELECT * FROM cards WHERE id=$1",
+            card_id
+        )
+
+
+async def get_card_by_ref(card_ref):
+    cleaned = clean_card_ref(str(card_ref))
+
+    if cleaned.isdigit():
+        card = await get_card_by_id(int(cleaned))
+        if card:
+            return card
+
+    return await get_card_by_name(str(card_ref))
+
+
+async def get_active_card_by_ref(card_ref):
+    cleaned = clean_card_ref(str(card_ref))
+
+    async with db_pool.acquire() as conn:
+        if cleaned.isdigit():
+            return await conn.fetchrow(
+                "SELECT * FROM cards WHERE id=$1 AND is_active = TRUE",
+                int(cleaned)
+            )
+
+        return await conn.fetchrow(
             "SELECT * FROM cards WHERE LOWER(name)=LOWER($1) AND is_active = TRUE",
-            name
+            str(card_ref)
         )
 
 
 async def get_all_cards():
     async with db_pool.acquire() as conn:
-        return await conn.fetch("SELECT * FROM cards ORDER BY rarity, name")
+        return await conn.fetch("SELECT * FROM cards ORDER BY id")
 
 
 async def get_active_cards():
     async with db_pool.acquire() as conn:
         return await conn.fetch(
-            "SELECT * FROM cards WHERE is_active = TRUE ORDER BY rarity, name"
+            "SELECT * FROM cards WHERE is_active = TRUE ORDER BY id"
         )
 
 
@@ -229,29 +274,25 @@ async def user_owns_card(user_id, card_id):
 
 async def get_user_active_cards(user_id):
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT DISTINCT cards.name
+        return await conn.fetch("""
+            SELECT DISTINCT cards.id, cards.name, cards.rarity
             FROM inventory
             JOIN cards ON cards.id = inventory.card_id
             WHERE inventory.user_id=$1
             AND cards.is_active = TRUE
-            ORDER BY cards.name
+            ORDER BY cards.id
         """, user_id)
-
-    return [row["name"] for row in rows]
 
 
 async def get_user_owned_cards_for_sell(user_id):
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT DISTINCT cards.name
+        return await conn.fetch("""
+            SELECT DISTINCT cards.id, cards.name, cards.rarity
             FROM inventory
             JOIN cards ON cards.id = inventory.card_id
             WHERE inventory.user_id=$1
-            ORDER BY cards.name
+            ORDER BY cards.id
         """, user_id)
-
-    return [row["name"] for row in rows]
 
 
 async def trade_cards(u1, c1, u2, c2):
@@ -388,18 +429,64 @@ async def set_cooldown(user_id, command_name):
         """, user_id, command_name, now)
 
 
-async def sell_one_card(user_id, card_name):
+async def update_daily_streak(user_id):
+    today = int(time.time() // 86400)
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT streak_count, last_claim_day FROM daily_streaks WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+
+            if not row:
+                streak = 1
+                await conn.execute(
+                    "INSERT INTO daily_streaks (user_id, streak_count, last_claim_day) VALUES ($1, $2, $3)",
+                    user_id,
+                    streak,
+                    today
+                )
+                return streak
+
+            last_day = row["last_claim_day"]
+            old_streak = row["streak_count"]
+
+            if last_day == today:
+                return old_streak
+
+            if last_day == today - 1:
+                streak = old_streak + 1
+            else:
+                streak = 1
+
+            await conn.execute(
+                "UPDATE daily_streaks SET streak_count=$1, last_claim_day=$2 WHERE user_id=$3",
+                streak,
+                today,
+                user_id
+            )
+
+            return streak
+
+
+async def sell_one_card(user_id, card_ref):
+    card = await get_card_by_ref(card_ref)
+
+    if not card:
+        return False, None, 0
+
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             card_entry = await conn.fetchrow("""
-                SELECT inventory.id AS inventory_id, cards.name, cards.rarity
+                SELECT inventory.id AS inventory_id, cards.id AS card_id, cards.name, cards.rarity
                 FROM inventory
                 JOIN cards ON cards.id = inventory.card_id
                 WHERE inventory.user_id=$1
-                AND LOWER(cards.name)=LOWER($2)
+                AND cards.id=$2
                 LIMIT 1
                 FOR UPDATE
-            """, user_id, card_name)
+            """, user_id, card["id"])
 
             if not card_entry:
                 return False, None, 0
@@ -427,9 +514,9 @@ async def your_cards_autocomplete(interaction: discord.Interaction, current: str
     cards = await get_user_active_cards(interaction.user.id)
 
     return [
-        app_commands.Choice(name=card, value=card)
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
         for card in cards
-        if current.lower() in card.lower()
+        if current.lower() in card_label(card).lower()
     ][:25]
 
 
@@ -437,9 +524,9 @@ async def sell_cards_autocomplete(interaction: discord.Interaction, current: str
     cards = await get_user_owned_cards_for_sell(interaction.user.id)
 
     return [
-        app_commands.Choice(name=card, value=card)
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
         for card in cards
-        if current.lower() in card.lower()
+        if current.lower() in card_label(card).lower()
     ][:25]
 
 
@@ -447,9 +534,9 @@ async def all_active_cards_autocomplete(interaction: discord.Interaction, curren
     cards = await get_active_cards()
 
     return [
-        app_commands.Choice(name=card["name"], value=card["name"])
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
         for card in cards
-        if current.lower() in card["name"].lower()
+        if current.lower() in card_label(card).lower()
     ][:25]
 
 
@@ -539,7 +626,7 @@ class ClaimView(discord.ui.View):
         await add_card_to_inventory(uid, self.card["id"])
 
         await interaction.response.edit_message(
-            content=f"{interaction.user.mention} claimed **{self.card['name']}**!",
+            content=f"{interaction.user.mention} claimed **{self.card['name']}**! `ID #{self.card['id']}`",
             view=self
         )
 
@@ -644,7 +731,7 @@ class RemoveCardView(discord.ui.View):
 
         await interaction.response.edit_message(
             content=(
-                f"**{self.card['name']}** has been removed from future drops and card lists.\n"
+                f"**{self.card['name']}** `ID #{self.card['id']}` has been removed from future drops and card lists.\n"
                 f"Members who already own it will keep it in their inventories."
             ),
             embed=None,
@@ -714,29 +801,42 @@ async def balance(interaction: discord.Interaction, user: discord.Member = None)
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="daily", description="Claim your daily currency reward.")
+@bot.tree.command(name="daily", description="Claim your daily currency reward and build a streak.")
 async def daily(interaction: discord.Interaction):
     user_id = interaction.user.id
-    now = int(time.time())
-    last_used = await get_cooldown(user_id, "daily")
+    today = int(time.time() // 86400)
 
-    if last_used and now - last_used < DAILY_COOLDOWN:
-        remaining = DAILY_COOLDOWN - (now - last_used)
-        hours = remaining // 3600
-        minutes = (remaining % 3600) // 60
+    async with db_pool.acquire() as conn:
+        last_claim_day = await conn.fetchval(
+            "SELECT last_claim_day FROM daily_streaks WHERE user_id=$1",
+            user_id
+        )
 
+    if last_claim_day == today:
         return await interaction.response.send_message(
-            f"You already claimed your daily. Try again in {hours}h {minutes}m.",
+            "You already claimed your daily today. Try again tomorrow.",
             ephemeral=True
         )
 
     amount = random.randint(DAILY_MIN, DAILY_MAX)
-    await add_balance(user_id, amount)
-    await set_cooldown(user_id, "daily")
+    streak = await update_daily_streak(user_id)
 
-    await interaction.response.send_message(
-        f"{interaction.user.mention} claimed their daily and received **{format_coins(amount)}**!"
+    bonus = 0
+    if streak % DAILY_STREAK_BONUS_EVERY == 0:
+        bonus = DAILY_STREAK_BONUS_AMOUNT
+
+    total = amount + bonus
+    await add_balance(user_id, total)
+
+    message = (
+        f"{interaction.user.mention} claimed their daily and received **{format_coins(amount)}**!\n"
+        f"Daily streak: **{streak} day(s)**"
     )
+
+    if bonus > 0:
+        message += f"\nMilestone bonus: **{format_coins(bonus)}** for reaching a {streak}-day streak!"
+
+    await interaction.response.send_message(message)
 
 
 @bot.tree.command(name="weekly", description="Claim your weekly currency reward.")
@@ -812,10 +912,10 @@ async def addbal(interaction: discord.Interaction, user: discord.Member, amount:
 
 
 @bot.tree.command(name="sell", description="Sell one of your cards for currency.")
-@app_commands.describe(card_name="Choose the card to sell")
-@app_commands.autocomplete(card_name=sell_cards_autocomplete)
-async def sell(interaction: discord.Interaction, card_name: str):
-    success, card_entry, value = await sell_one_card(interaction.user.id, card_name)
+@app_commands.describe(card="Choose the card to sell")
+@app_commands.autocomplete(card=sell_cards_autocomplete)
+async def sell(interaction: discord.Interaction, card: str):
+    success, card_entry, value = await sell_one_card(interaction.user.id, card)
 
     if not success:
         return await interaction.response.send_message(
@@ -824,7 +924,7 @@ async def sell(interaction: discord.Interaction, card_name: str):
         )
 
     await interaction.response.send_message(
-        f"You sold **{card_entry['name']}** ({card_entry['rarity']}) for **{format_coins(value)}**."
+        f"You sold **{card_entry['name']}** `ID #{card_entry['card_id']}` ({card_entry['rarity']}) for **{format_coins(value)}**."
     )
 
 
@@ -905,16 +1005,21 @@ async def buy(interaction: discord.Interaction, item: str):
 
 
 @bot.tree.command(name="viewcard", description="View a specific card.")
-@app_commands.describe(card_name="Choose a card to view")
-@app_commands.autocomplete(card_name=all_active_cards_autocomplete)
-async def viewcard(interaction: discord.Interaction, card_name: str):
-    c = await get_card_by_name(card_name)
+@app_commands.describe(card="Choose a card by ID or name")
+@app_commands.autocomplete(card=all_active_cards_autocomplete)
+async def viewcard(interaction: discord.Interaction, card: str):
+    c = await get_card_by_ref(card)
     if not c:
         return await interaction.response.send_message("Not found.", ephemeral=True)
 
+    active_text = "Currently obtainable" if c["is_active"] else "Unobtainable / limited"
     embed = discord.Embed(
         title=c["name"],
-        description=f"**Rarity:** {c['rarity']}",
+        description=(
+            f"**ID:** #{c['id']}\n"
+            f"**Rarity:** {c['rarity']}\n"
+            f"**Status:** {active_text}"
+        ),
         color=get_color(c["rarity"])
     )
     embed.set_image(url=c["image"])
@@ -932,15 +1037,15 @@ async def cards(interaction: discord.Interaction):
     grouped = {}
 
     for c in all_cards:
-        grouped.setdefault(c["rarity"], []).append(c["name"])
+        grouped.setdefault(c["rarity"], []).append(c)
 
     text = ""
 
     for rarity in ["Common", "Rare", "Epic", "Legendary"]:
         if rarity in grouped:
             text += f"**{rarity}**\n"
-            for name in grouped[rarity]:
-                text += f"• {name}\n"
+            for card in grouped[rarity]:
+                text += f"• ID #{card['id']} — {card['name']}\n"
             text += "\n"
 
     embed = discord.Embed(
@@ -959,12 +1064,12 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT cards.name, cards.rarity, cards.is_active, COUNT(*) as amount
+            SELECT cards.id, cards.name, cards.rarity, cards.is_active, COUNT(*) as amount
             FROM inventory
             JOIN cards ON cards.id = inventory.card_id
             WHERE user_id=$1
-            GROUP BY cards.name, cards.rarity, cards.is_active
-            ORDER BY cards.rarity, cards.name
+            GROUP BY cards.id, cards.name, cards.rarity, cards.is_active
+            ORDER BY cards.rarity, cards.id
         """, user.id)
 
     text = f"**Balance:** {format_coins(bal)}\n\n"
@@ -974,7 +1079,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"{r['rarity']} • {r['name']} x{r['amount']}{limited_note}\n"
+            text += f"{r['rarity']} • ID #{r['id']} — {r['name']} x{r['amount']}{limited_note}\n"
 
     embed = discord.Embed(
         title=f"{user.display_name}'s Inventory",
@@ -1007,8 +1112,8 @@ async def trade(
     if user.id == interaction.user.id:
         return await interaction.response.send_message("You cannot trade yourself.", ephemeral=True)
 
-    your_card_data = await get_active_card_by_name(your_card)
-    their_card_data = await get_active_card_by_name(their_card)
+    your_card_data = await get_active_card_by_ref(your_card)
+    their_card_data = await get_active_card_by_ref(their_card)
 
     if not your_card_data or not their_card_data:
         return await interaction.response.send_message("One of those cards is not currently tradeable.", ephemeral=True)
@@ -1036,8 +1141,8 @@ async def trade(
     embed = discord.Embed(
         title="Trade Request",
         description=(
-            f"{interaction.user.mention} offers **{your_card_data['name']}**\n"
-            f"in exchange for **{their_card_data['name']}** from {user.mention}\n\n"
+            f"{interaction.user.mention} offers **{your_card_data['name']}** `ID #{your_card_data['id']}`\n"
+            f"in exchange for **{their_card_data['name']}** `ID #{their_card_data['id']}` from {user.mention}\n\n"
             f"{user.mention}, accept or decline this trade."
         ),
         color=discord.Color.from_str("#9e659d")
@@ -1085,17 +1190,17 @@ async def addcard(
             )
 
             return await interaction.response.send_message(
-                f"Reactivated/updated **{name}** as a **{rarity.value}** card."
+                f"Reactivated/updated **{name}** as a **{rarity.value}** card. `ID #{existing_card['id']}`"
             )
 
-        await conn.execute(
-            "INSERT INTO cards (name, rarity, image, is_active) VALUES ($1,$2,$3, TRUE)",
+        new_id = await conn.fetchval(
+            "INSERT INTO cards (name, rarity, image, is_active) VALUES ($1,$2,$3, TRUE) RETURNING id",
             name,
             rarity.value,
             image
         )
 
-    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card.")
+    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `ID #{new_id}`")
 
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
@@ -1122,10 +1227,17 @@ async def dropcard(
 
     async with db_pool.acquire() as conn:
         if card_name:
-            cards = await conn.fetch(
-                "SELECT * FROM cards WHERE LOWER(name)=LOWER($1) AND is_active = TRUE",
-                card_name
-            )
+            cleaned = clean_card_ref(card_name)
+            if cleaned.isdigit():
+                cards = await conn.fetch(
+                    "SELECT * FROM cards WHERE id=$1 AND is_active = TRUE",
+                    int(cleaned)
+                )
+            else:
+                cards = await conn.fetch(
+                    "SELECT * FROM cards WHERE LOWER(name)=LOWER($1) AND is_active = TRUE",
+                    card_name
+                )
         elif rarity:
             cards = await conn.fetch(
                 "SELECT * FROM cards WHERE rarity=$1 AND is_active = TRUE",
@@ -1152,7 +1264,7 @@ async def removecard(interaction: discord.Interaction, card_name: str):
     if not is_staff(interaction.user):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    card = await get_active_card_by_name(card_name)
+    card = await get_active_card_by_ref(card_name)
 
     if not card:
         return await interaction.response.send_message("That active card was not found.", ephemeral=True)
@@ -1166,7 +1278,7 @@ async def removecard(interaction: discord.Interaction, card_name: str):
     embed = discord.Embed(
         title="Confirm Card Removal",
         description=(
-            f"Are you sure you want to remove **{card['name']}** from future drops and card lists?\n\n"
+            f"Are you sure you want to remove **{card['name']}** `ID #{card['id']}` from future drops and card lists?\n\n"
             f"Members who already own it will **keep it**."
         ),
         color=discord.Color.red()
