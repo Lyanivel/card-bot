@@ -316,7 +316,6 @@ def create_shop_embed():
 
         for key, item in items:
             emoji = get_shop_item_emoji(item)
-            # Item names are shown in inline code using backticks.
             text += f"{BULLET_EMOJI} {emoji} `{item['name']}` [{format_coins(item['price'])}]\n"
 
         text += "\n"
@@ -1667,17 +1666,17 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         """, user.id)
 
     text = f"**Balance:** {format_coins(bal)}\n"
-    text += f"{LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
-    text += f"{LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
+    text += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
+    text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
 
     if not rows:
         text += "No cards yet."
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"ID: {r['id']} â {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
+            text += f"{BULLET_EMOJI} ID: {r['id']} â {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
 
-    inventory_title = f"{title} {BULLET_EMOJI} {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
+    inventory_title = f"{title} â¢ {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
 
     embed = discord.Embed(
         title=inventory_title,
