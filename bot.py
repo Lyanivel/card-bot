@@ -34,14 +34,29 @@ CLAIM_COOLDOWN = 30
 WEEKLY_COOLDOWN = 7 * 24 * 60 * 60
 
 DAILY_MIN = 75
-DAILY_MAX = 175
+DAILY_MAX = 195
 DAILY_STREAK_BONUS_EVERY = 10
 DAILY_STREAK_BONUS_AMOUNT = 500
+DAILY_LOOT_CRATE_CHANCE = 2  # 2% chance
 
 WEEKLY_MIN = 500
 WEEKLY_MAX = 900
 
+CLAIM_LOOT_CRATE_CHANCE = 5  # 5% chance
+
+REGULAR_CRATE_MIN = 100
+REGULAR_CRATE_MAX = 500
+
+LEGENDARY_CRATE_MIN = 500
+LEGENDARY_CRATE_MAX = 1500
+LEGENDARY_SECOND_CARD_CHANCE = 20  # 20% chance
+
 CURRENCY_EMOJI = "<:sancs:1499174670568788018>"
+STREAK_EMOJI = "<:sancstreak:1499522539209359440>"
+WEEKLY_BOX_EMOJI = "<:weeklybox:1499468656290168964>"
+GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
+LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
+LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
 
 SELL_VALUES = {
     "Common": 25,
@@ -51,15 +66,17 @@ SELL_VALUES = {
 }
 
 SHOP_ITEMS = {
-    "smallbox": {
-        "name": "Small Prize Box",
-        "price": 500,
-        "description": "A simple prize box for future event rewards."
+    "lootcrate": {
+        "name": "Loot Crate",
+        "price": 750,
+        "description": "Open it with /opencrate for Sancs and a random card.",
+        "crate_type": "regular"
     },
-    "bigbox": {
-        "name": "Big Prize Box",
-        "price": 1500,
-        "description": "A bigger prize box for future event rewards."
+    "legendarycrate": {
+        "name": "Legendary Loot Crate",
+        "price": 3000,
+        "description": "Higher Sanc rewards, better rarity odds, and a chance for 2 cards.",
+        "crate_type": "legendary"
     },
 }
 
@@ -135,6 +152,14 @@ async def setup_database():
             );
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS loot_crates (
+                user_id BIGINT PRIMARY KEY,
+                regular_count INTEGER NOT NULL DEFAULT 0,
+                legendary_count INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+
 
 # ---------------- HELPERS ----------------
 
@@ -157,6 +182,11 @@ def format_coins(amount: int):
 
 def card_label(card):
     return f"ID: {card['id']} — {card['name']} ({card['rarity']})"
+
+
+def format_card_line(card, amount=None, limited_note=""):
+    amount_text = f" x{amount}" if amount is not None else ""
+    return f"ID: {card['id']} — {card['name']} ({card['rarity']}){amount_text}{limited_note}"
 
 
 def clean_card_ref(card_ref: str):
@@ -508,6 +538,100 @@ async def sell_one_card(user_id, card_ref):
             return True, card_entry, value
 
 
+
+# ---------------- LOOT CRATE FUNCTIONS ----------------
+
+async def get_loot_crates(user_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT regular_count, legendary_count FROM loot_crates WHERE user_id=$1",
+            user_id
+        )
+
+        if not row:
+            await conn.execute(
+                "INSERT INTO loot_crates (user_id, regular_count, legendary_count) VALUES ($1, 0, 0) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+            return 0, 0
+
+        return row["regular_count"], row["legendary_count"]
+
+
+async def add_loot_crate(user_id, crate_type="regular", amount=1):
+    column = "legendary_count" if crate_type == "legendary" else "regular_count"
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(f"""
+            INSERT INTO loot_crates (user_id, {column})
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET {column} = loot_crates.{column} + $2
+        """, user_id, amount)
+
+
+async def remove_loot_crate(user_id, crate_type="regular"):
+    column = "legendary_count" if crate_type == "legendary" else "regular_count"
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            count = await conn.fetchval(
+                f"SELECT {column} FROM loot_crates WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+
+            if count is None:
+                await conn.execute(
+                    "INSERT INTO loot_crates (user_id, regular_count, legendary_count) VALUES ($1, 0, 0) ON CONFLICT (user_id) DO NOTHING",
+                    user_id
+                )
+                return False
+
+            if count <= 0:
+                return False
+
+            await conn.execute(
+                f"UPDATE loot_crates SET {column} = {column} - 1 WHERE user_id=$1",
+                user_id
+            )
+
+            return True
+
+
+async def choose_random_card_with_weights(weights):
+    rarity = random.choices(
+        ["Common", "Rare", "Epic", "Legendary"],
+        weights=weights,
+        k=1
+    )[0]
+
+    async with db_pool.acquire() as conn:
+        cards = await conn.fetch(
+            "SELECT * FROM cards WHERE rarity=$1 AND is_active = TRUE",
+            rarity
+        )
+
+        if cards:
+            return random.choice(cards)
+
+        fallback_cards = await conn.fetch(
+            "SELECT * FROM cards WHERE is_active = TRUE"
+        )
+
+        if not fallback_cards:
+            return None
+
+        return random.choice(fallback_cards)
+
+
+async def choose_regular_crate_card():
+    return await choose_random_card_with_weights([60, 25, 10, 5])
+
+
+async def choose_legendary_crate_card():
+    return await choose_random_card_with_weights([25, 35, 25, 15])
+
+
 # ---------------- AUTOCOMPLETE ----------------
 
 async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
@@ -625,8 +749,18 @@ class ClaimView(discord.ui.View):
 
         await add_card_to_inventory(uid, self.card["id"])
 
+        found_crate = random.randint(1, 100) <= CLAIM_LOOT_CRATE_CHANCE
+
+        if found_crate:
+            await add_loot_crate(uid, "regular", 1)
+
+        content = f"{interaction.user.mention} claimed **{self.card['name']}**! `ID: {self.card['id']}`"
+
+        if found_crate:
+            content += f"\n{GIFT_BOX_EMOJI} You found a Loot Crate! Use `/opencrate`"
+
         await interaction.response.edit_message(
-            content=f"{interaction.user.mention} claimed **{self.card['name']}**! `ID: {self.card['id']}`",
+            content=content,
             view=self
         )
 
@@ -801,7 +935,7 @@ async def balance(interaction: discord.Interaction, user: discord.Member = None)
     await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(name="daily", description="Claim your daily currency reward and build a streak.")
+@bot.tree.command(name="daily", description="Claim your daily Sancs and build a streak.")
 async def daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     today = int(time.time() // 86400)
@@ -825,21 +959,27 @@ async def daily(interaction: discord.Interaction):
     if streak % DAILY_STREAK_BONUS_EVERY == 0:
         bonus = DAILY_STREAK_BONUS_AMOUNT
 
+    found_crate = random.randint(1, 100) <= DAILY_LOOT_CRATE_CHANCE
+
     total = amount + bonus
     await add_balance(user_id, total)
 
-    message = (
-        f"{interaction.user.mention} claimed their daily and received **{format_coins(amount)}**!\n"
-        f"Daily streak: **{streak} day(s)**"
-    )
+    if found_crate:
+        await add_loot_crate(user_id, "regular", 1)
+
+    message = f"{CURRENCY_EMOJI} | Take your Sancs and go! {STREAK_EMOJI} {streak}\n"
+    message += f"You received **{format_coins(amount)}**."
 
     if bonus > 0:
-        message += f"\nMilestone bonus: **{format_coins(bonus)}** for reaching a {streak}-day streak!"
+        message += f"\nMilestone bonus: **{format_coins(bonus)}**"
+
+    if found_crate:
+        message += f"\n{GIFT_BOX_EMOJI} You found a Loot Crate! Use `/opencrate`"
 
     await interaction.response.send_message(message)
 
 
-@bot.tree.command(name="weekly", description="Claim your weekly currency reward.")
+@bot.tree.command(name="weekly", description="Claim your weekly reward and Loot Crate.")
 async def weekly(interaction: discord.Interaction):
     user_id = interaction.user.id
     now = int(time.time())
@@ -857,10 +997,12 @@ async def weekly(interaction: discord.Interaction):
 
     amount = random.randint(WEEKLY_MIN, WEEKLY_MAX)
     await add_balance(user_id, amount)
+    await add_loot_crate(user_id, "regular", 1)
     await set_cooldown(user_id, "weekly")
 
     await interaction.response.send_message(
-        f"{interaction.user.mention} claimed their weekly reward and received **{format_coins(amount)}** + a **Prize Box**!"
+        f"{WEEKLY_BOX_EMOJI} | Your Weekly Box is unsealing!\n"
+        f"You received **{format_coins(amount)}** and **1 {LOOT_CRATE_EMOJI} Loot Crate**."
     )
 
 
@@ -962,8 +1104,9 @@ async def shop(interaction: discord.Interaction):
     text = ""
 
     for key, item in SHOP_ITEMS.items():
+        emoji = LEGENDARY_CRATE_EMOJI if item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
         text += (
-            f"**{item['name']}** (`{key}`)\n"
+            f"{emoji} **{item['name']}** (`{key}`)\n"
             f"Price: {format_coins(item['price'])}\n"
             f"{item['description']}\n\n"
         )
@@ -999,9 +1142,76 @@ async def buy(interaction: discord.Interaction, item: str):
             VALUES ($1, $2, $3, $4)
         """, interaction.user.id, item, shop_item["name"], shop_item["price"])
 
+    if "crate_type" in shop_item:
+        await add_loot_crate(interaction.user.id, shop_item["crate_type"], 1)
+
+    emoji = LEGENDARY_CRATE_EMOJI if shop_item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
+
     await interaction.response.send_message(
-        f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
+        f"{interaction.user.mention} bought **1 {emoji} {shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
     )
+
+
+@bot.tree.command(name="opencrate", description="Open a Loot Crate or Legendary Loot Crate.")
+@app_commands.describe(crate_type="Choose which crate to open")
+@app_commands.choices(
+    crate_type=[
+        app_commands.Choice(name="Loot Crate", value="regular"),
+        app_commands.Choice(name="Legendary Loot Crate", value="legendary"),
+    ]
+)
+async def opencrate(
+    interaction: discord.Interaction,
+    crate_type: app_commands.Choice[str]
+):
+    user_id = interaction.user.id
+    selected_type = crate_type.value
+
+    removed = await remove_loot_crate(user_id, selected_type)
+
+    if not removed:
+        crate_name = "Legendary Loot Crate" if selected_type == "legendary" else "Loot Crate"
+        return await interaction.response.send_message(
+            f"You do not have any **{crate_name}s** to open.",
+            ephemeral=True
+        )
+
+    if selected_type == "legendary":
+        coins = random.randint(LEGENDARY_CRATE_MIN, LEGENDARY_CRATE_MAX)
+        first_card = await choose_legendary_crate_card()
+        second_card = None
+
+        if random.randint(1, 100) <= LEGENDARY_SECOND_CARD_CHANCE:
+            second_card = await choose_legendary_crate_card()
+
+        crate_emoji = LEGENDARY_CRATE_EMOJI
+        crate_name = "Legendary Loot Crate"
+    else:
+        coins = random.randint(REGULAR_CRATE_MIN, REGULAR_CRATE_MAX)
+        first_card = await choose_regular_crate_card()
+        second_card = None
+        crate_emoji = LOOT_CRATE_EMOJI
+        crate_name = "Loot Crate"
+
+    await add_balance(user_id, coins)
+
+    rewards = f"**Sancs:** {format_coins(coins)}"
+
+    if first_card:
+        await add_card_to_inventory(user_id, first_card["id"])
+        rewards += f"\n**Card:** ID: {first_card['id']} — {first_card['name']} ({first_card['rarity']})"
+
+    if second_card:
+        await add_card_to_inventory(user_id, second_card["id"])
+        rewards += f"\n**Bonus Card:** ID: {second_card['id']} — {second_card['name']} ({second_card['rarity']})"
+
+    embed = discord.Embed(
+        title=f"{crate_emoji} {crate_name} Opened!",
+        description=rewards,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="viewcard", description="View a specific card.")
@@ -1061,6 +1271,7 @@ async def cards(interaction: discord.Interaction):
 async def inventory(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
     bal = await get_balance(user.id)
+    regular_crates, legendary_crates = await get_loot_crates(user.id)
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -1072,7 +1283,9 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
             ORDER BY cards.rarity, cards.id
         """, user.id)
 
-    text = f"**Balance:** {format_coins(bal)}\n\n"
+    text = f"**Balance:** {format_coins(bal)}\n"
+    text += f"{LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
+    text += f"{LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
 
     if not rows:
         text += "No cards yet."
