@@ -967,8 +967,13 @@ async def daily(interaction: discord.Interaction):
     if found_crate:
         await add_loot_crate(user_id, "regular", 1)
 
-    message = f"{CURRENCY_EMOJI} | Take your Sancs and go! {STREAK_EMOJI} {streak}\n"
-    message += f"You received **{format_coins(amount)}**."
+    message = (
+        f"{CURRENCY_EMOJI} | Take your Sancs and go! "
+        f"**{amount} {CURRENCY_EMOJI}**"
+    )
+
+    if streak >= 3:
+        message += f" [{STREAK_EMOJI} {streak}]"
 
     if bonus > 0:
         message += f"\nMilestone bonus: **{format_coins(bonus)}**"
