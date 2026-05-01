@@ -397,8 +397,6 @@ def create_shop_embed():
             emoji_text = f"{emoji} " if emoji else ""
             text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}` [{format_coins(item['price'])}]\n"
 
-        text += "\n"
-
     embed = discord.Embed(
         title="Shop",
         description=text or "The shop is currently empty.",
@@ -414,39 +412,39 @@ def create_shop_item_embed(item_key):
     emoji = get_shop_item_emoji(item)
     image_url = get_shop_item_image(item_key)
 
-    details = f"**Price:** [{format_coins(item['price'])}]\n\n"
+    details = f"**Price:** [{format_coins(item['price'])}]\n"
     details += f"**Info:** {item['description']}\n\n"
 
     if item.get("crate_type") == "regular":
         details += (
             "**Contains:**\n"
             f"{BULLET_EMOJI} {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
-            f"{BULLET_EMOJI} 1 random card\n\n"
+            f"{BULLET_EMOJI} 1 random card\n"
         )
     elif item.get("crate_type") == "legendary":
         details += (
             "**Contains:**\n"
             f"{BULLET_EMOJI} {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
             f"{BULLET_EMOJI} Higher rarity card odds\n"
-            f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n\n"
+            f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n"
         )
     elif item.get("boost_type") == "luck":
         details += (
             "**Effect:**\n"
             f"{BULLET_EMOJI} Lasts 1 hour\n"
-            f"{BULLET_EMOJI} Improves crate rarity odds while active\n\n"
+            f"{BULLET_EMOJI} Improves crate rarity odds while active\n"
         )
     elif "title_text" in item:
         details += (
             "**Title:**\n"
             f"{BULLET_EMOJI} {item['title_text']}\n"
-            f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n\n"
+            f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n"
         )
     elif "goos_amount" in item:
         details += (
             "**Exchange:**\n"
             f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
-            f"{BULLET_EMOJI} Staff must fulfill this manually\n\n"
+            f"{BULLET_EMOJI} Staff must fulfill this manually\n"
         )
 
     details += f"Use `/buy` and choose `{item['name']}` to purchase."
@@ -1493,7 +1491,7 @@ async def leaderboard(interaction: discord.Interaction):
             SELECT user_id, balance
             FROM balances
             ORDER BY balance DESC
-            LIMIT 10
+            LIMIT 25
         """)
 
     if not rows:
@@ -1515,7 +1513,7 @@ async def leaderboard(interaction: discord.Interaction):
         title_text = f" {title}" if title else ""
 
         text += f"{place} {user_mention}{title_text}\n"
-        text += f"{BULLET_EMOJI} {format_coins(row['balance'])}\n\n"
+        text += f"{BULLET_EMOJI} {format_coins(row['balance'])}\n"
 
     embed = discord.Embed(
         title="Currency Leaderboard",
