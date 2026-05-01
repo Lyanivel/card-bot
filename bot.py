@@ -1320,6 +1320,7 @@ bot = Bot()
 
 @bot.event
 async def on_ready():
+    await bot.tree.sync()
     print(f"Logged in as {bot.user}")
     if not auto_drop.is_running():
         auto_drop.start()
