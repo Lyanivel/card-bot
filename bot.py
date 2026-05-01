@@ -230,7 +230,22 @@ async def setup_database():
         """)
 
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS goos_exchange_requests (
+            
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS server_settings (
+                guild_id BIGINT PRIMARY KEY,
+                staff_role_id BIGINT
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS drop_channels (
+                guild_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            );
+        """)
+CREATE TABLE IF NOT EXISTS goos_exchange_requests (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
                 goos_amount BIGINT NOT NULL,
@@ -242,6 +257,45 @@ async def setup_database():
 
 
 # ---------------- HELPERS ----------------
+
+async def get_staff_role(guild_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT staff_role_id FROM server_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+async def set_staff_role_db(guild_id, role_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO server_settings (guild_id, staff_role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET staff_role_id=$2
+        """, guild_id, role_id)
+
+async def add_drop_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO drop_channels (guild_id, channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+        """, guild_id, channel_id)
+
+async def remove_drop_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            DELETE FROM drop_channels WHERE guild_id=$1 AND channel_id=$2
+        """, guild_id, channel_id)
+
+async def get_drop_channels_db(guild_id):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT channel_id FROM drop_channels WHERE guild_id=$1",
+            guild_id
+        )
+        return [r["channel_id"] for r in rows]
+
 
 def is_staff(member: discord.Member):
     return any(role.id == STAFF_ROLE_ID for role in member.roles)
@@ -1884,6 +1938,33 @@ async def removecard(interaction: discord.Interaction, card_name: str):
         ephemeral=True
     )
 
+
+
+
+@bot.tree.command(name="setstaffrole", description="Set the staff role for this server.")
+async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
+    await set_staff_role_db(interaction.guild.id, role.id)
+    await interaction.response.send_message(f"Staff role set to {role.mention}")
+
+@bot.tree.command(name="adddropchannel", description="Add a drop channel.")
+async def adddropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await add_drop_channel_db(interaction.guild.id, channel.id)
+    await interaction.response.send_message(f"Added {channel.mention} as a drop channel.")
+
+@bot.tree.command(name="removedropchannel", description="Remove a drop channel.")
+async def removedropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    await remove_drop_channel_db(interaction.guild.id, channel.id)
+    await interaction.response.send_message(f"Removed {channel.mention} from drop channels.")
+
+@bot.tree.command(name="listdropchannels", description="List drop channels.")
+async def listdropchannels(interaction: discord.Interaction):
+    channels = await get_drop_channels_db(interaction.guild.id)
+
+    if not channels:
+        return await interaction.response.send_message("No drop channels set.")
+
+    mentions = [f"<#{c}>" for c in channels]
+    await interaction.response.send_message("Drop channels:\n" + "\n".join(mentions))
 
 # ---------------- RUN ----------------
 
