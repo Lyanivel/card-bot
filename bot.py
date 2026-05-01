@@ -59,6 +59,7 @@ WEEKLY_BOX_EMOJI = "<:weeklybox:1499468656290168964>"
 GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
 LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
 LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
+BULLET_EMOJI = "<:heartdot:1499831890557800548>"
 
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
@@ -367,7 +368,7 @@ def get_shop_item_emoji(item):
         return "ð·ï¸"
     if "goos_amount" in item:
         return "ð"
-    return "â¢"
+    return BULLET_EMOJI
 
 
 def get_shop_item_image(item_key):
@@ -396,7 +397,7 @@ def create_shop_embed():
 
         for key, item in items:
             emoji = get_shop_item_emoji(item)
-            text += f"â¢ {emoji} {item['name']} [{format_coins(item['price'])}]\n"
+            text += f"{BULLET_EMOJI} {emoji} `{item['name']}` [{format_coins(item['price'])}]\n"
 
         text += "\n"
 
@@ -421,36 +422,36 @@ def create_shop_item_embed(item_key):
     if item.get("crate_type") == "regular":
         details += (
             "**Contains:**\n"
-            f"â¢ {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
-            "â¢ 1 random card\n\n"
+            f"{BULLET_EMOJI} {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
+            f"{BULLET_EMOJI} 1 random card\n\n"
         )
     elif item.get("crate_type") == "legendary":
         details += (
             "**Contains:**\n"
-            f"â¢ {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
-            "â¢ Higher rarity card odds\n"
-            f"â¢ {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n\n"
+            f"{BULLET_EMOJI} {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
+            f"{BULLET_EMOJI} Higher rarity card odds\n"
+            f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n\n"
         )
     elif item.get("boost_type") == "luck":
         details += (
             "**Effect:**\n"
-            "â¢ Lasts 1 hour\n"
-            "â¢ Improves crate rarity odds while active\n\n"
+            f"{BULLET_EMOJI} Lasts 1 hour\n"
+            f"{BULLET_EMOJI} Improves crate rarity odds while active\n\n"
         )
     elif "title_text" in item:
         details += (
             "**Title:**\n"
-            f"â¢ {item['title_text']}\n"
-            "â¢ Shows in /inventory and /leaderboard\n\n"
+            f"{BULLET_EMOJI} {item['title_text']}\n"
+            f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n\n"
         )
     elif "goos_amount" in item:
         details += (
             "**Exchange:**\n"
-            f"â¢ Requests {item['goos_amount']} Goos\n"
-            "â¢ Staff must fulfill this manually\n\n"
+            f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
+            f"{BULLET_EMOJI} Staff must fulfill this manually\n\n"
         )
 
-    details += f"Use `/buy` and choose **{item['name']}** to purchase."
+    details += f"Use `/buy` and choose `{item['name']}` to purchase."
 
     embed = discord.Embed(
         title=f"{emoji} {item['name']}",
@@ -461,7 +462,7 @@ def create_shop_item_embed(item_key):
     if image_url:
         embed.set_thumbnail(url=image_url)
 
-    embed.set_footer(text="Use /shop to return to the full shop list.")
+    embed.set_footer(text="Use the button below to return to the full shop list.")
 
     return embed
 
@@ -1287,13 +1288,13 @@ class ShopSelect(discord.ui.Select):
 
 class ShopView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=120)
+        super().__init__(timeout=180)
         self.add_item(ShopSelect())
 
 
 class BackToShopView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=120)
+        super().__init__(timeout=180)
 
     @discord.ui.button(label="Back to Shop", style=discord.ButtonStyle.secondary)
     async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1493,7 +1494,7 @@ async def leaderboard(interaction: discord.Interaction):
             SELECT user_id, balance
             FROM balances
             ORDER BY balance DESC
-            LIMIT 50
+            LIMIT 10
         """)
 
     if not rows:
@@ -1506,38 +1507,16 @@ async def leaderboard(interaction: discord.Interaction):
     }
 
     text = ""
-    shown_count = 0
 
-    for row in rows:
-        if not interaction.guild:
-            continue
+    for index, row in enumerate(rows, start=1):
+        place = place_emojis.get(index, f"**{index}.**")
+        user_mention = f"<@{row['user_id']}>"
 
-        member = interaction.guild.get_member(row["user_id"])
-
-        # If the member is not cached, fetch them directly from Discord.
-        if not member:
-            try:
-                member = await interaction.guild.fetch_member(row["user_id"])
-            except discord.NotFound:
-                continue
-            except discord.HTTPException:
-                continue
-
-        shown_count += 1
-        place = place_emojis.get(shown_count, f"**{shown_count}.**")
         title = await get_title(row["user_id"])
         title_text = f" *{title}*" if title else ""
 
-        text += f"{place} {member.mention}{title_text}\n"
-        text += f"â¢ {format_coins(row['balance'])}\n\n"
-
-        if shown_count >= 10:
-            break
-
-    if shown_count == 0:
-        return await interaction.response.send_message(
-            "No current server members have balances yet."
-        )
+        text += f"{place} {user_mention}{title_text}\n"
+        text += f"{BULLET_EMOJI} {format_coins(row['balance'])}\n\n"
 
     embed = discord.Embed(
         title="Currency Leaderboard",
@@ -1558,7 +1537,7 @@ async def viewtitles(interaction: discord.Interaction):
     text = ""
 
     for title_name, price in AVAILABLE_TITLES.items():
-        text += f"â¢ {title_name} [{format_coins(price)}]\n"
+        text += f"{BULLET_EMOJI} `{title_name}` [{format_coins(price)}]\n"
 
     embed = discord.Embed(
         title="Available Titles",
@@ -1741,7 +1720,7 @@ async def cards(interaction: discord.Interaction):
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for card in grouped[rarity]:
-                text += f"â¢ ID: {card['id']} {card['name']} ({card['rarity']})\n"
+                text += f"{BULLET_EMOJI} ID: {card['id']} {card['name']} ({card['rarity']})\n"
             text += "\n"
 
     embed = discord.Embed(
@@ -1771,17 +1750,17 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         """, user.id)
 
     text = f"**Balance:** {format_coins(bal)}\n"
-    text += f"{LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
-    text += f"{LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
+    text += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
+    text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
 
     if not rows:
         text += "No cards yet."
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"ID: {r['id']} {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
+            text += f"{BULLET_EMOJI} ID: {r['id']} {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
 
-    inventory_title = f"{title} â¢ {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
+    inventory_title = f"{title} {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
 
     embed = discord.Embed(
         title=inventory_title,
