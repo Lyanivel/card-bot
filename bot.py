@@ -62,8 +62,8 @@ LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
 
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
-LOOT_CRATE_IMAGE_URL = ""
-LEGENDARY_CRATE_IMAGE_URL = ""
+LOOT_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628974966444052/CCEE5E4A-7174-4490-AAFC-11C0EBE59404.png?ex=69f57dd1&is=69f42c51&hm=de07d24e7036229395f24221f8ce35b03dbb9917ecadf019dd98464b9317b396"
+LEGENDARY_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628950811447426/80D3C92F-BF33-4F0A-998C-4D6D076D1678.png?ex=69f57dcb&is=69f42c4b&hm=12738cf641cbdc40b176407fa1c6800bb7487955ddcf731a58e37e92b843d26e"
 
 AVAILABLE_TITLES = {
     "Sanction Elite": 5000,
