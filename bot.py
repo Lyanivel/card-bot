@@ -59,7 +59,6 @@ WEEKLY_BOX_EMOJI = "<:weeklybox:1499468656290168964>"
 GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
 LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
 LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
-BULLET_EMOJI = "<:heartdot:1499831890557800548>"
 
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
@@ -241,11 +240,92 @@ async def setup_database():
             );
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS server_settings (
+                guild_id BIGINT PRIMARY KEY,
+                staff_role_id BIGINT
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS drop_channels (
+                guild_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                PRIMARY KEY (guild_id, channel_id)
+            );
+        """)
+
 
 # ---------------- HELPERS ----------------
 
 def is_staff(member: discord.Member):
     return any(role.id == STAFF_ROLE_ID for role in member.roles)
+
+
+async def get_staff_role(guild_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT staff_role_id FROM server_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+
+async def set_staff_role_db(guild_id, role_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO server_settings (guild_id, staff_role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET staff_role_id=$2
+        """, guild_id, role_id)
+
+
+async def add_drop_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO drop_channels (guild_id, channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+        """, guild_id, channel_id)
+
+
+async def remove_drop_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM drop_channels WHERE guild_id=$1 AND channel_id=$2",
+            guild_id,
+            channel_id
+        )
+
+
+async def get_drop_channels_db(guild_id):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT channel_id FROM drop_channels WHERE guild_id=$1",
+            guild_id
+        )
+        return [row["channel_id"] for row in rows]
+
+
+async def get_all_drop_channel_ids():
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT channel_id FROM drop_channels")
+        return [row["channel_id"] for row in rows]
+
+
+async def is_staff_member(interaction: discord.Interaction):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return False
+
+    if interaction.user.guild_permissions.administrator:
+        return True
+
+    saved_staff_role_id = await get_staff_role(interaction.guild.id)
+
+    if saved_staff_role_id:
+        return any(role.id == saved_staff_role_id for role in interaction.user.roles)
+
+    return is_staff(interaction.user)
 
 
 def get_color(rarity):
@@ -287,7 +367,7 @@ def get_shop_item_emoji(item):
         return "ð·ï¸"
     if "goos_amount" in item:
         return "ð"
-    return "{BULLET_EMOJI}"
+    return "â¢"
 
 
 def get_shop_item_image(item_key):
@@ -316,7 +396,7 @@ def create_shop_embed():
 
         for key, item in items:
             emoji = get_shop_item_emoji(item)
-            text += f"{BULLET_EMOJI} {emoji} `{item['name']}` [{format_coins(item['price'])}]\n"
+            text += f"â¢ {emoji} {item['name']} [{format_coins(item['price'])}]\n"
 
         text += "\n"
 
@@ -341,36 +421,36 @@ def create_shop_item_embed(item_key):
     if item.get("crate_type") == "regular":
         details += (
             "**Contains:**\n"
-            f"{BULLET_EMOJI} {format_coins(REGULAR_CRATE_MIN)}â{REGULAR_CRATE_MAX:,}\n"
-            f"{BULLET_EMOJI} 1 random card\n\n"
+            f"â¢ {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
+            "â¢ 1 random card\n\n"
         )
     elif item.get("crate_type") == "legendary":
         details += (
             "**Contains:**\n"
-            f"{BULLET_EMOJI} {format_coins(LEGENDARY_CRATE_MIN)}â{LEGENDARY_CRATE_MAX:,}\n"
-            f"{BULLET_EMOJI} Higher rarity card odds\n"
-            f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n\n"
+            f"â¢ {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
+            "â¢ Higher rarity card odds\n"
+            f"â¢ {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n\n"
         )
     elif item.get("boost_type") == "luck":
         details += (
             "**Effect:**\n"
-            f"{BULLET_EMOJI} Lasts 1 hour\n"
-            f"{BULLET_EMOJI} Improves crate rarity odds while active\n\n"
+            "â¢ Lasts 1 hour\n"
+            "â¢ Improves crate rarity odds while active\n\n"
         )
     elif "title_text" in item:
         details += (
             "**Title:**\n"
-            f"{BULLET_EMOJI} {item['title_text']}\n"
-            f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n\n"
+            f"â¢ {item['title_text']}\n"
+            "â¢ Shows in /inventory and /leaderboard\n\n"
         )
     elif "goos_amount" in item:
         details += (
             "**Exchange:**\n"
-            f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
-            f"{BULLET_EMOJI} Staff must fulfill this manually\n\n"
+            f"â¢ Requests {item['goos_amount']} Goos\n"
+            "â¢ Staff must fulfill this manually\n\n"
         )
 
-    details += f"Use `/buy` and choose `{item['name']}` to purchase."
+    details += f"Use `/buy` and choose **{item['name']}** to purchase."
 
     embed = discord.Embed(
         title=f"{emoji} {item['name']}",
@@ -381,18 +461,18 @@ def create_shop_item_embed(item_key):
     if image_url:
         embed.set_thumbnail(url=image_url)
 
-    embed.set_footer(text="Use the button below to return to the full shop list.")
+    embed.set_footer(text="Use /shop to return to the full shop list.")
 
     return embed
 
 
 def card_label(card):
-    return f"ID: {card['id']} â {card['name']} ({card['rarity']})"
+    return f"ID: {card['id']} {card['name']} ({card['rarity']})"
 
 
 def format_card_line(card, amount=None, limited_note=""):
     amount_text = f" x{amount}" if amount is not None else ""
-    return f"ID: {card['id']} â {card['name']} ({card['rarity']}){amount_text}{limited_note}"
+    return f"ID: {card['id']} {card['name']} ({card['rarity']}){amount_text}{limited_note}"
 
 
 def clean_card_ref(card_ref: str):
@@ -986,7 +1066,13 @@ async def auto_drop():
     if random.randint(1, 100) > AUTO_DROP_CHANCE:
         return
 
-    channel = bot.get_channel(random.choice(DROP_CHANNEL_IDS))
+    saved_channel_ids = await get_all_drop_channel_ids()
+    possible_channel_ids = saved_channel_ids or DROP_CHANNEL_IDS
+
+    if not possible_channel_ids:
+        return
+
+    channel = bot.get_channel(random.choice(possible_channel_ids))
     if not channel:
         return
 
@@ -1178,9 +1264,6 @@ class ShopSelect(discord.ui.Select):
         options = []
 
         for key, item in SHOP_ITEMS.items():
-            emoji = get_shop_item_emoji(item)
-            # Custom emoji strings cannot be passed as SelectOption emoji reliably,
-            # so we keep the label simple and show emojis in the embed itself.
             options.append(
                 discord.SelectOption(
                     label=item["name"],
@@ -1204,13 +1287,13 @@ class ShopSelect(discord.ui.Select):
 
 class ShopView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=180)
+        super().__init__(timeout=120)
         self.add_item(ShopSelect())
 
 
 class BackToShopView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=180)
+        super().__init__(timeout=120)
 
     @discord.ui.button(label="Back to Shop", style=discord.ButtonStyle.secondary)
     async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1373,7 +1456,7 @@ async def givecurrency(interaction: discord.Interaction, user: discord.Member, a
     amount="Amount to add"
 )
 async def addbal(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     if amount <= 0:
@@ -1410,7 +1493,7 @@ async def leaderboard(interaction: discord.Interaction):
             SELECT user_id, balance
             FROM balances
             ORDER BY balance DESC
-            LIMIT 10
+            LIMIT 50
         """)
 
     if not rows:
@@ -1423,16 +1506,38 @@ async def leaderboard(interaction: discord.Interaction):
     }
 
     text = ""
+    shown_count = 0
 
-    for index, row in enumerate(rows, start=1):
-        place = place_emojis.get(index, f"**{index}.**")
-        user_mention = f"<@{row['user_id']}>"
+    for row in rows:
+        if not interaction.guild:
+            continue
 
+        member = interaction.guild.get_member(row["user_id"])
+
+        # If the member is not cached, fetch them directly from Discord.
+        if not member:
+            try:
+                member = await interaction.guild.fetch_member(row["user_id"])
+            except discord.NotFound:
+                continue
+            except discord.HTTPException:
+                continue
+
+        shown_count += 1
+        place = place_emojis.get(shown_count, f"**{shown_count}.**")
         title = await get_title(row["user_id"])
-        title_text = f" â *{title}*" if title else ""
+        title_text = f" *{title}*" if title else ""
 
-        text += f"{place} {user_mention}{title_text}\n"
-        text += f"{BULLET_EMOJI} {format_coins(row['balance'])}\n\n"
+        text += f"{place} {member.mention}{title_text}\n"
+        text += f"â¢ {format_coins(row['balance'])}\n\n"
+
+        if shown_count >= 10:
+            break
+
+    if shown_count == 0:
+        return await interaction.response.send_message(
+            "No current server members have balances yet."
+        )
 
     embed = discord.Embed(
         title="Currency Leaderboard",
@@ -1453,7 +1558,7 @@ async def viewtitles(interaction: discord.Interaction):
     text = ""
 
     for title_name, price in AVAILABLE_TITLES.items():
-        text += f"{BULLET_EMOJI} `{title_name}` [{format_coins(price)}]\n"
+        text += f"â¢ {title_name} [{format_coins(price)}]\n"
 
     embed = discord.Embed(
         title="Available Titles",
@@ -1580,11 +1685,11 @@ async def opencrate(
 
     if first_card:
         await add_card_to_inventory(user_id, first_card["id"])
-        rewards += f"\n**Card:** ID: {first_card['id']} â {first_card['name']} ({first_card['rarity']})"
+        rewards += f"\n**Card:** ID: {first_card['id']} {first_card['name']} ({first_card['rarity']})"
 
     if second_card:
         await add_card_to_inventory(user_id, second_card["id"])
-        rewards += f"\n**Bonus Card:** ID: {second_card['id']} â {second_card['name']} ({second_card['rarity']})"
+        rewards += f"\n**Bonus Card:** ID: {second_card['id']} {second_card['name']} ({second_card['rarity']})"
 
     embed = discord.Embed(
         title=f"{crate_emoji} {crate_name} Opened!",
@@ -1636,7 +1741,7 @@ async def cards(interaction: discord.Interaction):
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for card in grouped[rarity]:
-                text += f"{BULLET_EMOJI} ID: {card['id']} â {card['name']} ({card['rarity']})\n"
+                text += f"â¢ ID: {card['id']} {card['name']} ({card['rarity']})\n"
             text += "\n"
 
     embed = discord.Embed(
@@ -1666,17 +1771,17 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         """, user.id)
 
     text = f"**Balance:** {format_coins(bal)}\n"
-    text += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
-    text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
+    text += f"{LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
+    text += f"{LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
 
     if not rows:
         text += "No cards yet."
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"{BULLET_EMOJI} ID: {r['id']} â {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
+            text += f"ID: {r['id']} {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
 
-    inventory_title = f"{title} â¢ {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
+    inventory_title = f"{title} â¢ {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
 
     embed = discord.Embed(
         title=inventory_title,
@@ -1768,7 +1873,7 @@ async def addcard(
     rarity: app_commands.Choice[str],
     image: str
 ):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     existing_card = await get_card_by_name(name)
@@ -1819,7 +1924,7 @@ async def dropcard(
     rarity: Optional[app_commands.Choice[str]] = None,
     card_name: Optional[str] = None
 ):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     async with db_pool.acquire() as conn:
@@ -1858,7 +1963,7 @@ async def dropcard(
 @app_commands.describe(card_name="Choose the card to remove")
 @app_commands.autocomplete(card_name=all_active_cards_autocomplete)
 async def removecard(interaction: discord.Interaction, card_name: str):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     card = await get_active_card_by_ref(card_name)
@@ -1886,6 +1991,71 @@ async def removecard(interaction: discord.Interaction, card_name: str):
         view=RemoveCardView(interaction.user, card),
         ephemeral=True
     )
+
+
+
+@bot.tree.command(name="setstaffrole", description="Admin only: set the staff role for this server.")
+@app_commands.describe(role="Role allowed to use staff bot commands")
+async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            "Only server administrators can set the staff role.",
+            ephemeral=True
+        )
+
+    await set_staff_role_db(interaction.guild.id, role.id)
+
+    await interaction.response.send_message(
+        f"Staff role set to {role.mention}."
+    )
+
+
+@bot.tree.command(name="adddropchannel", description="Staff only: add a channel for automatic card drops.")
+@app_commands.describe(channel="Channel where automatic drops can happen")
+async def adddropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    await add_drop_channel_db(interaction.guild.id, channel.id)
+
+    await interaction.response.send_message(
+        f"Added {channel.mention} as a drop channel."
+    )
+
+
+@bot.tree.command(name="removedropchannel", description="Staff only: remove a channel from automatic card drops.")
+@app_commands.describe(channel="Channel to remove from automatic drops")
+async def removedropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    await remove_drop_channel_db(interaction.guild.id, channel.id)
+
+    await interaction.response.send_message(
+        f"Removed {channel.mention} from drop channels."
+    )
+
+
+@bot.tree.command(name="listdropchannels", description="View this server's automatic card drop channels.")
+async def listdropchannels(interaction: discord.Interaction):
+    channels = await get_drop_channels_db(interaction.guild.id)
+
+    if not channels:
+        return await interaction.response.send_message("No drop channels set for this server.")
+
+    mentions = []
+
+    for channel_id in channels:
+        channel = interaction.guild.get_channel(channel_id)
+        mentions.append(channel.mention if channel else f"`{channel_id}`")
+
+    embed = discord.Embed(
+        title="Drop Channels",
+        description="\n".join(mentions),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
 
 
 # ---------------- RUN ----------------
