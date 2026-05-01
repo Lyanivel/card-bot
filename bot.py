@@ -1312,7 +1312,8 @@ class Bot(discord.Client):
         global db_pool
         db_pool = await asyncpg.create_pool(DATABASE_URL)
         await setup_database()
-        await self.tree.sync()
+        synced = await self.tree.sync()
+        print(f"Synced {len(synced)} slash commands.")
 
 
 bot = Bot()
@@ -1320,7 +1321,6 @@ bot = Bot()
 
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
     print(f"Logged in as {bot.user}")
     if not auto_drop.is_running():
         auto_drop.start()
@@ -1516,14 +1516,10 @@ async def leaderboard(interaction: discord.Interaction):
 
         member = interaction.guild.get_member(row["user_id"])
 
-        # If the member is not cached, fetch them directly from Discord.
+        # Hide users who are not currently cached as server members.
+        # This avoids slow Discord API lookups that can cause "application did not respond."
         if not member:
-            try:
-                member = await interaction.guild.fetch_member(row["user_id"])
-            except discord.NotFound:
-                continue
-            except discord.HTTPException:
-                continue
+            continue
 
         shown_count += 1
         place = place_emojis.get(shown_count, f"**{shown_count}.**")
@@ -1538,7 +1534,7 @@ async def leaderboard(interaction: discord.Interaction):
 
     if shown_count == 0:
         return await interaction.response.send_message(
-            "No current server members have balances yet."
+            "No current server members are loaded for the leaderboard yet. Try again in a minute, or use /balance to confirm your balance."
         )
 
     embed = discord.Embed(
@@ -2058,6 +2054,26 @@ async def listdropchannels(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed)
+
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    print(f"Slash command error: {repr(error)}")
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "Something went wrong while running that command. Please try again.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "Something went wrong while running that command. Please try again.",
+                ephemeral=True
+            )
+    except Exception as send_error:
+        print(f"Could not send error response: {repr(send_error)}")
 
 
 # ---------------- RUN ----------------
