@@ -60,6 +60,9 @@ GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
 LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
 LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
 BULLET_EMOJI = "<:heartdot:1499831890557800548>"
+TOP_1_EMOJI = "PASTE_1ST_PLACE_EMOJI_HERE"
+TOP_2_EMOJI = "PASTE_2ND_PLACE_EMOJI_HERE"
+TOP_3_EMOJI = "PASTE_3RD_PLACE_EMOJI_HERE"
 
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
@@ -364,6 +367,7 @@ def get_shop_item_emoji(item):
         return LEGENDARY_CRATE_EMOJI
     return ""
 
+
 def get_shop_item_image(item_key):
     if item_key == "lootcrate":
         return LOOT_CRATE_IMAGE_URL
@@ -447,8 +451,10 @@ def create_shop_item_embed(item_key):
 
     details += f"Use `/buy` and choose `{item['name']}` to purchase."
 
+    embed_title = f"{emoji} {item['name']}" if emoji else item["name"]
+
     embed = discord.Embed(
-        title=f"{emoji} {item['name']}",
+        title=embed_title,
         description=details,
         color=discord.Color.from_str("#9e659d")
     )
@@ -1495,19 +1501,19 @@ async def leaderboard(interaction: discord.Interaction):
         return await interaction.response.send_message("No balances yet.")
 
     place_emojis = {
-        1: "ð¥",
-        2: "ð¥",
-        3: "ð¥",
+        1: TOP_1_EMOJI,
+        2: TOP_2_EMOJI,
+        3: TOP_3_EMOJI,
     }
 
     text = ""
 
     for index, row in enumerate(rows, start=1):
-        place = place_emojis.get(index, f"**{index}.**")
+        place = place_emojis.get(index, f"#{index}")
         user_mention = f"<@{row['user_id']}>"
 
         title = await get_title(row["user_id"])
-        title_text = f" *{title}*" if title else ""
+        title_text = f" {title}" if title else ""
 
         text += f"{place} {user_mention}{title_text}\n"
         text += f"{BULLET_EMOJI} {format_coins(row['balance'])}\n\n"
