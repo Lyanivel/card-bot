@@ -1412,24 +1412,23 @@ async def leaderboard(interaction: discord.Interaction):
     if not rows:
         return await interaction.response.send_message("No balances yet.")
 
+    place_emojis = {
+        1: "ð¥",
+        2: "ð¥",
+        3: "ð¥",
+    }
+
     text = ""
 
     for index, row in enumerate(rows, start=1):
-        member = interaction.guild.get_member(row["user_id"]) if interaction.guild else None
-
-        if member:
-            name = member.display_name
-        else:
-            try:
-                fetched_user = await bot.fetch_user(row["user_id"])
-                name = fetched_user.name
-            except Exception:
-                name = f"Unknown User"
+        place = place_emojis.get(index, f"**{index}.**")
+        user_mention = f"<@{row['user_id']}>"
 
         title = await get_title(row["user_id"])
         title_text = f" â *{title}*" if title else ""
 
-        text += f"**{index}.** {name}{title_text} â {format_coins(row['balance'])}\n"
+        text += f"{place} {user_mention}{title_text}\n"
+        text += f"â§ {format_coins(row['balance'])}\n\n"
 
     embed = discord.Embed(
         title="Currency Leaderboard",
