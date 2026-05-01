@@ -1,7 +1,9 @@
 import os
 import random
 import time
+from datetime import datetime, timedelta
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import asyncpg
 import discord
@@ -70,13 +72,51 @@ SHOP_ITEMS = {
         "name": "Loot Crate",
         "price": 750,
         "description": "Open it with /opencrate for Sancs and a random card.",
+        "category": "Crates",
         "crate_type": "regular"
     },
     "legendarycrate": {
         "name": "Legendary Loot Crate",
         "price": 3000,
-        "description": "Higher Sanc rewards, better rarity odds, and a chance for 2 cards.",
+        "description": "Higher rewards, better rarity odds, and a chance for 2 cards.",
+        "category": "Crates",
         "crate_type": "legendary"
+    },
+    "luckboost": {
+        "name": "Luck Boost",
+        "price": 2500,
+        "description": "Better crate rarity odds for 1 hour.",
+        "category": "Boosts",
+        "boost_type": "luck",
+        "duration_seconds": 60 * 60
+    },
+    "title": {
+        "name": "Special Title",
+        "price": 5000,
+        "description": "Unlocks the title: Sanction Elite.",
+        "category": "Cosmetics",
+        "title_text": "Sanction Elite"
+    },
+    "goos100": {
+        "name": "100 Goos Exchange",
+        "price": 2500,
+        "description": "Request 100 Goos. Staff must fulfill this manually.",
+        "category": "Exchange",
+        "goos_amount": 100
+    },
+    "goos250": {
+        "name": "250 Goos Exchange",
+        "price": 6000,
+        "description": "Request 250 Goos. Staff must fulfill this manually.",
+        "category": "Exchange",
+        "goos_amount": 250
+    },
+    "goos500": {
+        "name": "500 Goos Exchange",
+        "price": 11000,
+        "description": "Request 500 Goos. Staff must fulfill this manually.",
+        "category": "Exchange",
+        "goos_amount": 500
     },
 }
 
@@ -160,6 +200,33 @@ async def setup_database():
             );
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_boosts (
+                user_id BIGINT NOT NULL,
+                boost_type TEXT NOT NULL,
+                expires_at BIGINT NOT NULL,
+                PRIMARY KEY (user_id, boost_type)
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_titles (
+                user_id BIGINT PRIMARY KEY,
+                title TEXT NOT NULL
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS goos_exchange_requests (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                goos_amount BIGINT NOT NULL,
+                sancs_cost BIGINT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
 
 # ---------------- HELPERS ----------------
 
@@ -178,6 +245,21 @@ def get_color(rarity):
 
 def format_coins(amount: int):
     return f"{CURRENCY_EMOJI} {amount:,}"
+
+
+def eastern_day_number():
+    now = datetime.now(ZoneInfo("America/New_York"))
+    return int(now.strftime("%Y%m%d"))
+
+
+def previous_eastern_day_number(today: int):
+    current_date = datetime.strptime(str(today), "%Y%m%d")
+    previous_date = current_date - timedelta(days=1)
+    return int(previous_date.strftime("%Y%m%d"))
+
+
+def format_title(title):
+    return title if title else "None"
 
 
 def card_label(card):
@@ -460,7 +542,8 @@ async def set_cooldown(user_id, command_name):
 
 
 async def update_daily_streak(user_id):
-    today = int(time.time() // 86400)
+    today = eastern_day_number()
+    yesterday = previous_eastern_day_number(today)
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -485,7 +568,7 @@ async def update_daily_streak(user_id):
             if last_day == today:
                 return old_streak
 
-            if last_day == today - 1:
+            if last_day == yesterday:
                 streak = old_streak + 1
             else:
                 streak = 1
@@ -536,6 +619,74 @@ async def sell_one_card(user_id, card_ref):
             """, user_id, value)
 
             return True, card_entry, value
+
+
+
+# ---------------- BOOST / TITLE FUNCTIONS ----------------
+
+async def get_active_boost(user_id, boost_type):
+    now = int(time.time())
+
+    async with db_pool.acquire() as conn:
+        expires_at = await conn.fetchval(
+            "SELECT expires_at FROM user_boosts WHERE user_id=$1 AND boost_type=$2",
+            user_id,
+            boost_type
+        )
+
+        if not expires_at:
+            return None
+
+        if expires_at <= now:
+            await conn.execute(
+                "DELETE FROM user_boosts WHERE user_id=$1 AND boost_type=$2",
+                user_id,
+                boost_type
+            )
+            return None
+
+        return expires_at
+
+
+async def set_boost(user_id, boost_type, duration_seconds):
+    expires_at = int(time.time()) + duration_seconds
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_boosts (user_id, boost_type, expires_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, boost_type)
+            DO UPDATE SET expires_at=$3
+        """, user_id, boost_type, expires_at)
+
+    return expires_at
+
+
+async def get_title(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT title FROM user_titles WHERE user_id=$1",
+            user_id
+        )
+
+
+async def set_title(user_id, title):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_titles (user_id, title)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET title=$2
+        """, user_id, title)
+
+
+async def create_goos_request(user_id, goos_amount, cost):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval("""
+            INSERT INTO goos_exchange_requests (user_id, goos_amount, sancs_cost)
+            VALUES ($1, $2, $3)
+            RETURNING id
+        """, user_id, goos_amount, cost)
 
 
 
@@ -624,11 +775,17 @@ async def choose_random_card_with_weights(weights):
         return random.choice(fallback_cards)
 
 
-async def choose_regular_crate_card():
+async def choose_regular_crate_card(user_id=None):
+    if user_id and await get_active_boost(user_id, "luck"):
+        return await choose_random_card_with_weights([45, 30, 17, 8])
+
     return await choose_random_card_with_weights([60, 25, 10, 5])
 
 
-async def choose_legendary_crate_card():
+async def choose_legendary_crate_card(user_id=None):
+    if user_id and await get_active_boost(user_id, "luck"):
+        return await choose_random_card_with_weights([15, 30, 30, 25])
+
     return await choose_random_card_with_weights([25, 35, 25, 15])
 
 
@@ -938,7 +1095,7 @@ async def balance(interaction: discord.Interaction, user: discord.Member = None)
 @bot.tree.command(name="daily", description="Claim your daily Sancs and build a streak.")
 async def daily(interaction: discord.Interaction):
     user_id = interaction.user.id
-    today = int(time.time() // 86400)
+    today = eastern_day_number()
 
     async with db_pool.acquire() as conn:
         last_claim_day = await conn.fetchval(
@@ -948,7 +1105,7 @@ async def daily(interaction: discord.Interaction):
 
     if last_claim_day == today:
         return await interaction.response.send_message(
-            "You already claimed your daily today. Try again tomorrow.",
+            "You already claimed your daily today. Daily resets at midnight Eastern.",
             ephemeral=True
         )
 
@@ -1092,8 +1249,20 @@ async def leaderboard(interaction: discord.Interaction):
 
     for index, row in enumerate(rows, start=1):
         member = interaction.guild.get_member(row["user_id"]) if interaction.guild else None
-        name = member.display_name if member else f"User {row['user_id']}"
-        text += f"**{index}.** {name} — {format_coins(row['balance'])}\n"
+
+        if member:
+            name = member.display_name
+        else:
+            try:
+                fetched_user = await bot.fetch_user(row["user_id"])
+                name = fetched_user.name
+            except Exception:
+                name = f"Unknown User"
+
+        title = await get_title(row["user_id"])
+        title_text = f" — *{title}*" if title else ""
+
+        text += f"**{index}.** {name}{title_text} — {format_coins(row['balance'])}\n"
 
     embed = discord.Embed(
         title="Currency Leaderboard",
@@ -1106,21 +1275,32 @@ async def leaderboard(interaction: discord.Interaction):
 
 @bot.tree.command(name="shop", description="View the currency shop.")
 async def shop(interaction: discord.Interaction):
+    categories = ["Crates", "Boosts", "Cosmetics", "Exchange"]
     text = ""
 
-    for key, item in SHOP_ITEMS.items():
-        emoji = LEGENDARY_CRATE_EMOJI if item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
-        text += (
-            f"{emoji} **{item['name']}** (`{key}`)\n"
-            f"Price: {format_coins(item['price'])}\n"
-            f"{item['description']}\n\n"
-        )
+    for category in categories:
+        items = [
+            (key, item)
+            for key, item in SHOP_ITEMS.items()
+            if item.get("category") == category
+        ]
+
+        if not items:
+            continue
+
+        text += f"**{category}**\n"
+
+        for key, item in items:
+            text += f"• {item['name']} — {format_coins(item['price'])}\n"
+
+        text += "\n"
 
     embed = discord.Embed(
         title="Shop",
         description=text or "The shop is currently empty.",
         color=discord.Color.from_str("#9e659d")
     )
+    embed.set_footer(text="Use /buy and choose an item from the dropdown.")
 
     await interaction.response.send_message(embed=embed)
 
@@ -1149,11 +1329,47 @@ async def buy(interaction: discord.Interaction, item: str):
 
     if "crate_type" in shop_item:
         await add_loot_crate(interaction.user.id, shop_item["crate_type"], 1)
+        emoji = LEGENDARY_CRATE_EMOJI if shop_item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
 
-    emoji = LEGENDARY_CRATE_EMOJI if shop_item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
+        return await interaction.response.send_message(
+            f"{interaction.user.mention} bought **1 {emoji} {shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
+        )
+
+    if shop_item.get("boost_type") == "luck":
+        expires_at = await set_boost(
+            interaction.user.id,
+            "luck",
+            shop_item.get("duration_seconds", 3600)
+        )
+
+        return await interaction.response.send_message(
+            f"Luck Boost activated for **1 hour**! Crate odds are improved until <t:{expires_at}:t>."
+        )
+
+    if "title_text" in shop_item:
+        await set_title(interaction.user.id, shop_item["title_text"])
+
+        return await interaction.response.send_message(
+            f"{interaction.user.mention} bought the title **{shop_item['title_text']}** for **{format_coins(shop_item['price'])}**!"
+        )
+
+    if "goos_amount" in shop_item:
+        request_id = await create_goos_request(
+            interaction.user.id,
+            shop_item["goos_amount"],
+            shop_item["price"]
+        )
+
+        return await interaction.response.send_message(
+            f"Goos exchange request created!\n"
+            f"Request ID: **#{request_id}**\n"
+            f"Requested: **{shop_item['goos_amount']} Goos**\n"
+            f"Cost: **{format_coins(shop_item['price'])}**\n"
+            f"A staff member will need to fulfill this manually."
+        )
 
     await interaction.response.send_message(
-        f"{interaction.user.mention} bought **1 {emoji} {shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
+        f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
     )
 
 
@@ -1183,17 +1399,17 @@ async def opencrate(
 
     if selected_type == "legendary":
         coins = random.randint(LEGENDARY_CRATE_MIN, LEGENDARY_CRATE_MAX)
-        first_card = await choose_legendary_crate_card()
+        first_card = await choose_legendary_crate_card(user_id)
         second_card = None
 
         if random.randint(1, 100) <= LEGENDARY_SECOND_CARD_CHANCE:
-            second_card = await choose_legendary_crate_card()
+            second_card = await choose_legendary_crate_card(user_id)
 
         crate_emoji = LEGENDARY_CRATE_EMOJI
         crate_name = "Legendary Loot Crate"
     else:
         coins = random.randint(REGULAR_CRATE_MIN, REGULAR_CRATE_MAX)
-        first_card = await choose_regular_crate_card()
+        first_card = await choose_regular_crate_card(user_id)
         second_card = None
         crate_emoji = LOOT_CRATE_EMOJI
         crate_name = "Loot Crate"
@@ -1277,6 +1493,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     user = user or interaction.user
     bal = await get_balance(user.id)
     regular_crates, legendary_crates = await get_loot_crates(user.id)
+    title = await get_title(user.id)
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -1289,6 +1506,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         """, user.id)
 
     text = f"**Balance:** {format_coins(bal)}\n"
+    text += f"**Title:** {format_title(title)}\n"
     text += f"{LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
     text += f"{LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
 
