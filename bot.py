@@ -362,14 +362,7 @@ def get_shop_item_emoji(item):
         return LOOT_CRATE_EMOJI
     if item.get("crate_type") == "legendary":
         return LEGENDARY_CRATE_EMOJI
-    if item.get("boost_type") == "luck":
-        return "ð"
-    if "title_text" in item:
-        return "ð·ï¸"
-    if "goos_amount" in item:
-        return "ð"
-    return BULLET_EMOJI
-
+    return ""
 
 def get_shop_item_image(item_key):
     if item_key == "lootcrate":
@@ -397,7 +390,8 @@ def create_shop_embed():
 
         for key, item in items:
             emoji = get_shop_item_emoji(item)
-            text += f"{BULLET_EMOJI} {emoji} `{item['name']}` [{format_coins(item['price'])}]\n"
+            emoji_text = f"{emoji} " if emoji else ""
+            text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}` [{format_coins(item['price'])}]\n"
 
         text += "\n"
 
