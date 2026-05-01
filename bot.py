@@ -60,6 +60,19 @@ GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
 LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
 LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
 
+# Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
+# The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
+LOOT_CRATE_IMAGE_URL = ""
+LEGENDARY_CRATE_IMAGE_URL = ""
+
+AVAILABLE_TITLES = {
+    "Sanction Elite": 5000,
+    "Loot Goblin": 5000,
+    "Crate Hunter": 5000,
+    "High Roller": 7500,
+    "Card Collector": 5000,
+}
+
 SELL_VALUES = {
     "Common": 25,
     "Rare": 75,
@@ -93,7 +106,7 @@ SHOP_ITEMS = {
     "title": {
         "name": "Special Title",
         "price": 5000,
-        "description": "Unlocks the title: Sanction Elite.",
+        "description": "Unlocks the title: Sanction Elite. More approved titles can be listed with /viewtitles.",
         "category": "Cosmetics",
         "title_text": "Sanction Elite"
     },
@@ -260,6 +273,116 @@ def previous_eastern_day_number(today: int):
 
 def format_title(title):
     return title if title else "None"
+
+
+def get_shop_item_emoji(item):
+    if item.get("crate_type") == "regular":
+        return LOOT_CRATE_EMOJI
+    if item.get("crate_type") == "legendary":
+        return LEGENDARY_CRATE_EMOJI
+    if item.get("boost_type") == "luck":
+        return "🍀"
+    if "title_text" in item:
+        return "🏷️"
+    if "goos_amount" in item:
+        return "🔁"
+    return "•"
+
+
+def get_shop_item_image(item_key):
+    if item_key == "lootcrate":
+        return LOOT_CRATE_IMAGE_URL
+    if item_key == "legendarycrate":
+        return LEGENDARY_CRATE_IMAGE_URL
+    return ""
+
+
+def create_shop_embed():
+    categories = ["Crates", "Boosts", "Cosmetics", "Exchange"]
+    text = ""
+
+    for category in categories:
+        items = [
+            (key, item)
+            for key, item in SHOP_ITEMS.items()
+            if item.get("category") == category
+        ]
+
+        if not items:
+            continue
+
+        text += f"**{category}**\n"
+
+        for key, item in items:
+            emoji = get_shop_item_emoji(item)
+            text += f"• {emoji} {item['name']} [{format_coins(item['price'])}]\n"
+
+        text += "\n"
+
+    embed = discord.Embed(
+        title="Shop",
+        description=text or "The shop is currently empty.",
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="Choose an item below to view details.")
+
+    return embed
+
+
+def create_shop_item_embed(item_key):
+    item = SHOP_ITEMS[item_key]
+    emoji = get_shop_item_emoji(item)
+    image_url = get_shop_item_image(item_key)
+
+    details = f"**Price:** [{format_coins(item['price'])}]\n\n"
+    details += f"**Info:** {item['description']}\n\n"
+
+    if item.get("crate_type") == "regular":
+        details += (
+            "**Contains:**\n"
+            f"• {format_coins(REGULAR_CRATE_MIN)}–{REGULAR_CRATE_MAX:,}\n"
+            "• 1 random card\n\n"
+        )
+    elif item.get("crate_type") == "legendary":
+        details += (
+            "**Contains:**\n"
+            f"• {format_coins(LEGENDARY_CRATE_MIN)}–{LEGENDARY_CRATE_MAX:,}\n"
+            "• Higher rarity card odds\n"
+            f"• {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n\n"
+        )
+    elif item.get("boost_type") == "luck":
+        details += (
+            "**Effect:**\n"
+            "• Lasts 1 hour\n"
+            "• Improves crate rarity odds while active\n\n"
+        )
+    elif "title_text" in item:
+        details += (
+            "**Title:**\n"
+            f"• {item['title_text']}\n"
+            "• Shows in /inventory and /leaderboard\n\n"
+        )
+    elif "goos_amount" in item:
+        details += (
+            "**Exchange:**\n"
+            f"• Requests {item['goos_amount']} Goos\n"
+            "• Staff must fulfill this manually\n\n"
+        )
+
+    details += f"Use `/buy` and choose **{item['name']}** to purchase."
+
+    embed = discord.Embed(
+        title=f"{emoji} {item['name']}",
+        description=details,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    if image_url:
+        embed.set_thumbnail(url=image_url)
+
+    embed.set_footer(text="Use /shop to return to the full shop list.")
+
+    return embed
 
 
 def card_label(card):
@@ -1046,6 +1169,50 @@ class RemoveCardView(discord.ui.View):
         )
 
 
+
+# ---------------- SHOP UI ----------------
+
+class ShopSelect(discord.ui.Select):
+    def __init__(self):
+        options = []
+
+        for key, item in SHOP_ITEMS.items():
+            options.append(
+                discord.SelectOption(
+                    label=item["name"],
+                    value=key,
+                    description=item["description"][:100]
+                )
+            )
+
+        super().__init__(
+            placeholder="Select an item to view details...",
+            min_values=1,
+            max_values=1,
+            options=options[:25]
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        item_key = self.values[0]
+        embed = create_shop_item_embed(item_key)
+        await interaction.response.edit_message(embed=embed, view=BackToShopView())
+
+
+class ShopView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(ShopSelect())
+
+
+class BackToShopView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+
+    @discord.ui.button(label="Back to Shop", style=discord.ButtonStyle.secondary)
+    async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=create_shop_embed(), view=ShopView())
+
+
 # ---------------- BOT ----------------
 
 class Bot(discord.Client):
@@ -1275,32 +1442,22 @@ async def leaderboard(interaction: discord.Interaction):
 
 @bot.tree.command(name="shop", description="View the currency shop.")
 async def shop(interaction: discord.Interaction):
-    categories = ["Crates", "Boosts", "Cosmetics", "Exchange"]
+    await interaction.response.send_message(embed=create_shop_embed(), view=ShopView())
+
+
+@bot.tree.command(name="viewtitles", description="View approved titles available for purchase.")
+async def viewtitles(interaction: discord.Interaction):
     text = ""
 
-    for category in categories:
-        items = [
-            (key, item)
-            for key, item in SHOP_ITEMS.items()
-            if item.get("category") == category
-        ]
-
-        if not items:
-            continue
-
-        text += f"**{category}**\n"
-
-        for key, item in items:
-            text += f"• {item['name']} — {format_coins(item['price'])}\n"
-
-        text += "\n"
+    for title_name, price in AVAILABLE_TITLES.items():
+        text += f"• {title_name} [{format_coins(price)}]\n"
 
     embed = discord.Embed(
-        title="Shop",
-        description=text or "The shop is currently empty.",
+        title="Available Titles",
+        description=text or "No titles are available right now.",
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Use /buy and choose an item from the dropdown.")
+    embed.set_footer(text="For now, /buy Special Title unlocks Sanction Elite. More title buying options can be added later.")
 
     await interaction.response.send_message(embed=embed)
 
@@ -1506,7 +1663,6 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         """, user.id)
 
     text = f"**Balance:** {format_coins(bal)}\n"
-    text += f"**Title:** {format_title(title)}\n"
     text += f"{LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
     text += f"{LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
 
@@ -1517,8 +1673,10 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
             text += f"ID: {r['id']} — {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
 
+    inventory_title = f"{title} • {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
+
     embed = discord.Embed(
-        title=f"{user.display_name}'s Inventory",
+        title=inventory_title,
         description=text,
         color=discord.Color.from_str("#9e659d")
     )
