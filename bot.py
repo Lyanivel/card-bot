@@ -230,7 +230,16 @@ async def setup_database():
         """)
 
         await conn.execute("""
-            
+            CREATE TABLE IF NOT EXISTS goos_exchange_requests (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                goos_amount BIGINT NOT NULL,
+                sancs_cost BIGINT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS server_settings (
                 guild_id BIGINT PRIMARY KEY,
@@ -245,18 +254,13 @@ async def setup_database():
                 PRIMARY KEY (guild_id, channel_id)
             );
         """)
-CREATE TABLE IF NOT EXISTS goos_exchange_requests (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                goos_amount BIGINT NOT NULL,
-                sancs_cost BIGINT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
 
 
 # ---------------- HELPERS ----------------
+
+def is_staff(member: discord.Member):
+    return any(role.id == STAFF_ROLE_ID for role in member.roles)
+
 
 async def get_staff_role(guild_id):
     async with db_pool.acquire() as conn:
@@ -264,6 +268,7 @@ async def get_staff_role(guild_id):
             "SELECT staff_role_id FROM server_settings WHERE guild_id=$1",
             guild_id
         )
+
 
 async def set_staff_role_db(guild_id, role_id):
     async with db_pool.acquire() as conn:
@@ -274,6 +279,7 @@ async def set_staff_role_db(guild_id, role_id):
             DO UPDATE SET staff_role_id=$2
         """, guild_id, role_id)
 
+
 async def add_drop_channel_db(guild_id, channel_id):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -282,11 +288,15 @@ async def add_drop_channel_db(guild_id, channel_id):
             ON CONFLICT DO NOTHING
         """, guild_id, channel_id)
 
+
 async def remove_drop_channel_db(guild_id, channel_id):
     async with db_pool.acquire() as conn:
-        await conn.execute("""
-            DELETE FROM drop_channels WHERE guild_id=$1 AND channel_id=$2
-        """, guild_id, channel_id)
+        await conn.execute(
+            "DELETE FROM drop_channels WHERE guild_id=$1 AND channel_id=$2",
+            guild_id,
+            channel_id
+        )
+
 
 async def get_drop_channels_db(guild_id):
     async with db_pool.acquire() as conn:
@@ -294,11 +304,28 @@ async def get_drop_channels_db(guild_id):
             "SELECT channel_id FROM drop_channels WHERE guild_id=$1",
             guild_id
         )
-        return [r["channel_id"] for r in rows]
+        return [row["channel_id"] for row in rows]
 
 
-def is_staff(member: discord.Member):
-    return any(role.id == STAFF_ROLE_ID for role in member.roles)
+async def get_all_drop_channel_ids():
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT channel_id FROM drop_channels")
+        return [row["channel_id"] for row in rows]
+
+
+async def is_staff_member(interaction: discord.Interaction):
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return False
+
+    if interaction.user.guild_permissions.administrator:
+        return True
+
+    saved_staff_role_id = await get_staff_role(interaction.guild.id)
+
+    if saved_staff_role_id:
+        return any(role.id == saved_staff_role_id for role in interaction.user.roles)
+
+    return is_staff(interaction.user)
 
 
 def get_color(rarity):
@@ -1039,7 +1066,13 @@ async def auto_drop():
     if random.randint(1, 100) > AUTO_DROP_CHANCE:
         return
 
-    channel = bot.get_channel(random.choice(DROP_CHANNEL_IDS))
+    saved_channel_ids = await get_all_drop_channel_ids()
+    possible_channel_ids = saved_channel_ids or DROP_CHANNEL_IDS
+
+    if not possible_channel_ids:
+        return
+
+    channel = bot.get_channel(random.choice(possible_channel_ids))
     if not channel:
         return
 
@@ -1423,7 +1456,7 @@ async def givecurrency(interaction: discord.Interaction, user: discord.Member, a
     amount="Amount to add"
 )
 async def addbal(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     if amount <= 0:
@@ -1819,7 +1852,7 @@ async def addcard(
     rarity: app_commands.Choice[str],
     image: str
 ):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     existing_card = await get_card_by_name(name)
@@ -1870,7 +1903,7 @@ async def dropcard(
     rarity: Optional[app_commands.Choice[str]] = None,
     card_name: Optional[str] = None
 ):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     async with db_pool.acquire() as conn:
@@ -1909,7 +1942,7 @@ async def dropcard(
 @app_commands.describe(card_name="Choose the card to remove")
 @app_commands.autocomplete(card_name=all_active_cards_autocomplete)
 async def removecard(interaction: discord.Interaction, card_name: str):
-    if not is_staff(interaction.user):
+    if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
     card = await get_active_card_by_ref(card_name)
@@ -1940,31 +1973,69 @@ async def removecard(interaction: discord.Interaction, card_name: str):
 
 
 
-
-@bot.tree.command(name="setstaffrole", description="Set the staff role for this server.")
+@bot.tree.command(name="setstaffrole", description="Admin only: set the staff role for this server.")
+@app_commands.describe(role="Role allowed to use staff bot commands")
 async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            "Only server administrators can set the staff role.",
+            ephemeral=True
+        )
+
     await set_staff_role_db(interaction.guild.id, role.id)
-    await interaction.response.send_message(f"Staff role set to {role.mention}")
 
-@bot.tree.command(name="adddropchannel", description="Add a drop channel.")
+    await interaction.response.send_message(
+        f"Staff role set to {role.mention}."
+    )
+
+
+@bot.tree.command(name="adddropchannel", description="Staff only: add a channel for automatic card drops.")
+@app_commands.describe(channel="Channel where automatic drops can happen")
 async def adddropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
     await add_drop_channel_db(interaction.guild.id, channel.id)
-    await interaction.response.send_message(f"Added {channel.mention} as a drop channel.")
 
-@bot.tree.command(name="removedropchannel", description="Remove a drop channel.")
+    await interaction.response.send_message(
+        f"Added {channel.mention} as a drop channel."
+    )
+
+
+@bot.tree.command(name="removedropchannel", description="Staff only: remove a channel from automatic card drops.")
+@app_commands.describe(channel="Channel to remove from automatic drops")
 async def removedropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
-    await remove_drop_channel_db(interaction.guild.id, channel.id)
-    await interaction.response.send_message(f"Removed {channel.mention} from drop channels.")
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
 
-@bot.tree.command(name="listdropchannels", description="List drop channels.")
+    await remove_drop_channel_db(interaction.guild.id, channel.id)
+
+    await interaction.response.send_message(
+        f"Removed {channel.mention} from drop channels."
+    )
+
+
+@bot.tree.command(name="listdropchannels", description="View this server's automatic card drop channels.")
 async def listdropchannels(interaction: discord.Interaction):
     channels = await get_drop_channels_db(interaction.guild.id)
 
     if not channels:
-        return await interaction.response.send_message("No drop channels set.")
+        return await interaction.response.send_message("No drop channels set for this server.")
 
-    mentions = [f"<#{c}>" for c in channels]
-    await interaction.response.send_message("Drop channels:\n" + "\n".join(mentions))
+    mentions = []
+
+    for channel_id in channels:
+        channel = interaction.guild.get_channel(channel_id)
+        mentions.append(channel.mention if channel else f"`{channel_id}`")
+
+    embed = discord.Embed(
+        title="Drop Channels",
+        description="\n".join(mentions),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
+
 
 # ---------------- RUN ----------------
 
