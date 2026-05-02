@@ -386,7 +386,7 @@ async def is_staff_member(interaction: discord.Interaction):
 def create_goos_log_embed_from_values(buyer_id, request_id, goos_amount, sancs_cost, status="Paid", claimed_by=None, completed_by=None):
     description = (
         f"**User:** <@{buyer_id}>\n"
-        f"**Request ID:** #{request_id}\n"
+        
         f"**Requested:** {goos_amount} Goos\n"
         f"**Cost:** {format_coins(sancs_cost)}\n"
         f"**Status:** {status}"
@@ -413,22 +413,15 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
         return False
 
     channel_id = await get_goos_log_channel(interaction.guild.id)
-
     if not channel_id:
         return False
 
     channel = interaction.guild.get_channel(channel_id)
-
-    if channel is None:
-        channel = bot.get_channel(channel_id)
-
     if channel is None:
         try:
             channel = await bot.fetch_channel(channel_id)
         except Exception:
             return False
-
-    staff_ping = await get_staff_ping(interaction)
 
     embed = create_goos_log_embed_from_values(
         buyer_id=interaction.user.id,
@@ -437,6 +430,8 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
         sancs_cost=shop_item["price"],
         status="Paid"
     )
+
+    staff_ping = await get_staff_ping(interaction)
 
     await channel.send(
         content=staff_ping,
@@ -451,6 +446,7 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
     )
 
     return True
+
 
 def get_color(rarity):
     return {
@@ -1427,7 +1423,7 @@ class GoosExchangeSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        log_sent = await send_goos_log(interaction, request_id, shop_item)
+        await send_goos_log(interaction, request_id, shop_item)
 
         if not log_sent:
             await interaction.followup.send(
@@ -1762,7 +1758,7 @@ async def buy(interaction: discord.Interaction, item: str):
             ephemeral=True
         )
 
-        log_sent = await send_goos_log(interaction, request_id, shop_item)
+        await send_goos_log(interaction, request_id, shop_item)
 
         if not log_sent:
             await interaction.followup.send(
