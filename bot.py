@@ -55,6 +55,7 @@ LUCK_BOOST_EMOJI = "<:luckboost:1499715335253786745>"
 WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
 TITLE_EMOJI = "<:title:1499751841481752686>"
 SANC4OOS_EMOJI = "<:sanc4oos:1499903033042276493>"
+CUSTOM_EMOJI_SHOP = "<:customemoji:1499912654528053329>"
 DAILY_BOOST_PERCENT = 25
 WEEKLY_BOOST_PERCENT = 20
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
@@ -70,6 +71,7 @@ TITLE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/14
 SANC4OOS_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499902115605123243/0CC3FA91-214E-4938-B2A0-49605AD35984.png"
 SHOP_ICON_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499880843756437625/Black_and_White_Geometri_Open_Here_Square_Sticker.png"
 INVENTORY_ICON_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499889754936840380/E46DF3DB-5008-48CE-B80B-645CBA562354.png"
+CUSTOM_EMOJI_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1500015304888029194/4273C882-7CD2-4AE3-A92C-0EEA5EF8A730.png"
 AVAILABLE_TITLES = {
     "Sanction Elite": 5000,
     "Loot Goblin": 5000,
@@ -142,6 +144,13 @@ SHOP_ITEMS = {
         "description": "Unlocks the title: Sanction Elite. More approved titles can be listed with /viewtitles.",
         "category": "Cosmetics",
         "title_text": "Sanction Elite"
+    },
+    "customemoji": {
+        "name": "Custom Name Emoji",
+        "price": 15000,
+        "description": "Request a custom emoji to show after your name in leaderboard and inventory. Staff must approve.",
+        "category": "Cosmetics",
+        "custom_emoji_request": True
     },
     "goosexchange": {
         "name": "Sanc to Goos Exchange",
@@ -253,6 +262,27 @@ async def setup_database():
             CREATE TABLE IF NOT EXISTS user_titles (
                 user_id BIGINT PRIMARY KEY,
                 title TEXT NOT NULL
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_custom_emojis (
+                user_id BIGINT PRIMARY KEY,
+                emoji TEXT NOT NULL
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS custom_emoji_requests (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                emoji TEXT NOT NULL,
+                price BIGINT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reviewed_by BIGINT,
+                reviewed_at TIMESTAMP,
+                reason TEXT
             );
         """)
         await conn.execute("""
@@ -507,6 +537,8 @@ def get_shop_item_emoji(item):
         return TITLE_EMOJI
     if item.get("exchange_menu") or "goos_amount" in item:
         return SANC4OOS_EMOJI
+    if item.get("custom_emoji_request"):
+        return CUSTOM_EMOJI_SHOP
     return ""
 
 def get_shop_item_image(item_key):
@@ -528,6 +560,8 @@ def get_shop_item_image(item_key):
         return TITLE_IMAGE_URL
     if item_key == "goosexchange" or item_key.startswith("goos"):
         return SANC4OOS_IMAGE_URL
+    if item_key == "customemoji":
+        return CUSTOM_EMOJI_IMAGE_URL
     return ""
 
 def create_shop_embed():
@@ -615,6 +649,14 @@ def create_shop_item_embed(item_key):
                 "**Title:**\n"
                 f"{BULLET_EMOJI} {item['title_text']}\n"
                 f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n"
+            )
+        elif item.get("custom_emoji_request"):
+            details += (
+                "**How it works:**\n"
+                f"{BULLET_EMOJI} Buy this item, then paste the emoji you want\n"
+                f"{BULLET_EMOJI} Staff will approve or deny it in the staff log\n"
+                f"{BULLET_EMOJI} If denied, your Sancs are refunded\n"
+                f"{BULLET_EMOJI} Approved emojis show after your name in /leaderboard and /inventory\n"
             )
         elif item.get("manual_item"):
             details += (
@@ -997,6 +1039,95 @@ async def set_title(user_id, title):
             DO UPDATE SET title=$2
         """, user_id, title)
 
+
+async def set_user_custom_emoji(user_id, emoji):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_custom_emojis (user_id, emoji)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET emoji=$2
+        """, user_id, emoji)
+
+
+async def get_user_custom_emoji(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT emoji FROM user_custom_emojis WHERE user_id=$1",
+            user_id
+        )
+
+
+async def create_custom_emoji_request(user_id, emoji, price):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval("""
+            INSERT INTO custom_emoji_requests (user_id, emoji, price)
+            VALUES ($1, $2, $3)
+            RETURNING id
+        """, user_id, emoji, price)
+
+
+async def approve_custom_emoji_request(request_id, staff_id):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT user_id, emoji, status FROM custom_emoji_requests WHERE id=$1 FOR UPDATE",
+                request_id
+            )
+
+            if not row:
+                return False, "That custom emoji request was not found.", None
+
+            if row["status"] != "pending":
+                return False, "That custom emoji request has already been reviewed.", None
+
+            await conn.execute("""
+                UPDATE custom_emoji_requests
+                SET status='approved', reviewed_by=$1, reviewed_at=CURRENT_TIMESTAMP
+                WHERE id=$2
+            """, staff_id, request_id)
+
+            await conn.execute("""
+                INSERT INTO user_custom_emojis (user_id, emoji)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id)
+                DO UPDATE SET emoji=$2
+            """, row["user_id"], row["emoji"])
+
+            return True, "Custom emoji approved.", row
+
+
+async def deny_custom_emoji_request(request_id, staff_id, reason="No reason provided."):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT user_id, emoji, price, status FROM custom_emoji_requests WHERE id=$1 FOR UPDATE",
+                request_id
+            )
+
+            if not row:
+                return False, "That custom emoji request was not found.", None
+
+            if row["status"] != "pending":
+                return False, "That custom emoji request has already been reviewed.", None
+
+            await conn.execute("""
+                UPDATE custom_emoji_requests
+                SET status='denied', reviewed_by=$1, reviewed_at=CURRENT_TIMESTAMP, reason=$2
+                WHERE id=$3
+            """, staff_id, reason, request_id)
+
+            await conn.execute("""
+                INSERT INTO balances (user_id, balance)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id)
+                DO UPDATE SET balance = balances.balance + $2
+            """, row["user_id"], row["price"])
+
+            return True, "Custom emoji denied and refunded.", row
+
+
+
 async def create_goos_request(user_id, goos_amount, cost):
     async with db_pool.acquire() as conn:
         return await conn.fetchval("""
@@ -1329,6 +1460,130 @@ class RemoveCardView(discord.ui.View):
             embed=None,
             view=self
         )
+
+
+# ---------------- CUSTOM EMOJI REQUEST STAFF VIEW ----------------
+
+class CustomEmojiRequestView(discord.ui.View):
+    def __init__(self, request_id, buyer_id, emoji, price):
+        super().__init__(timeout=None)
+        self.request_id = request_id
+        self.buyer_id = buyer_id
+        self.emoji = emoji
+        self.price = price
+
+    def build_embed(self, status="Pending", reviewed_by=None, reason=None):
+        description = (
+            f"**User:** <@{self.buyer_id}>\n"
+            f"**Requested Emoji:** {self.emoji}\n"
+            f"**Cost:** {format_coins(self.price)}\n"
+            f"**Status:** {status}"
+        )
+
+        if reviewed_by:
+            description += f"\n**Reviewed by:** <@{reviewed_by}>"
+
+        if reason:
+            description += f"\n**Reason:** {reason}"
+
+        embed = discord.Embed(
+            title="Custom Name Emoji Request",
+            description=description,
+            color=discord.Color.from_str("#9e659d")
+        )
+        embed.set_footer(text="Approve to add this emoji to the user's leaderboard and inventory display.")
+
+        return embed
+
+    @discord.ui.button(label="Approve", style=discord.ButtonStyle.success)
+    async def approve_request(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await is_staff_member(interaction):
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+
+        success, message, row = await approve_custom_emoji_request(self.request_id, interaction.user.id)
+
+        if not success:
+            return await interaction.response.send_message(message, ephemeral=True)
+
+        for child in self.children:
+            child.disabled = True
+
+        await interaction.response.edit_message(
+            embed=self.build_embed("Approved", reviewed_by=interaction.user.id),
+            view=self
+        )
+
+        try:
+            user = await bot.fetch_user(self.buyer_id)
+            await user.send(f"Your custom name emoji was approved: {self.emoji}")
+        except Exception:
+            pass
+
+    @discord.ui.button(label="Deny + Refund", style=discord.ButtonStyle.danger)
+    async def deny_request(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await is_staff_member(interaction):
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+
+        reason = "Denied by staff."
+        success, message, row = await deny_custom_emoji_request(self.request_id, interaction.user.id, reason)
+
+        if not success:
+            return await interaction.response.send_message(message, ephemeral=True)
+
+        for child in self.children:
+            child.disabled = True
+
+        await interaction.response.edit_message(
+            embed=self.build_embed("Denied and Refunded", reviewed_by=interaction.user.id, reason=reason),
+            view=self
+        )
+
+        try:
+            user = await bot.fetch_user(self.buyer_id)
+            await user.send(f"Your custom name emoji request was denied and refunded. Reason: {reason}")
+        except Exception:
+            pass
+
+
+async def send_custom_emoji_log(interaction: discord.Interaction, request_id, emoji, price):
+    if not interaction.guild:
+        return False
+
+    channel_id = await get_goos_log_channel(interaction.guild.id)
+
+    if not channel_id:
+        print("No staff log channel is set for custom emoji requests.")
+        return False
+
+    channel = interaction.guild.get_channel(channel_id) or bot.get_channel(channel_id)
+
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception as e:
+            print(f"Could not fetch staff log channel {channel_id}: {e}")
+            return False
+
+    staff_ping = await get_staff_ping(interaction)
+
+    view = CustomEmojiRequestView(
+        request_id=request_id,
+        buyer_id=interaction.user.id,
+        emoji=emoji,
+        price=price
+    )
+
+    try:
+        await channel.send(
+            content=staff_ping,
+            embed=view.build_embed(),
+            view=view,
+            allowed_mentions=discord.AllowedMentions(roles=True, users=True)
+        )
+        return True
+    except Exception as e:
+        print(f"Could not send custom emoji request to channel {channel_id}: {e}")
+        return False
 
 # ---------------- GOOS REQUEST STAFF VIEW ----------------
 
@@ -1680,7 +1935,9 @@ async def leaderboard(interaction: discord.Interaction):
         user_mention = f"<@{row['user_id']}>"
         title = await get_title(row["user_id"])
         title_text = f" {title}" if title else ""
-        text += f"{place} {user_mention}{title_text}\n"
+        custom_emoji = await get_user_custom_emoji(row["user_id"])
+        emoji_text = f" {custom_emoji}" if custom_emoji else ""
+        text += f"{place} {user_mention}{emoji_text}{title_text}\n"
         text += f"{BULLET_EMOJI} {format_coins(row['balance'])}\n"
     embed = discord.Embed(
         title="Currency Leaderboard",
@@ -1724,6 +1981,56 @@ async def buy(interaction: discord.Interaction, item: str):
             INSERT INTO purchases (user_id, item_key, item_name, price)
             VALUES ($1, $2, $3, $4)
         """, interaction.user.id, item, shop_item["name"], shop_item["price"])
+    if shop_item.get("custom_emoji_request"):
+        await interaction.response.send_message(
+            "Paste the emoji you want to use after your name. You have 60 seconds.",
+            ephemeral=True
+        )
+
+        def check(message):
+            return (
+                message.author.id == interaction.user.id
+                and message.channel.id == interaction.channel.id
+                and len(message.content.strip()) > 0
+            )
+
+        try:
+            msg = await bot.wait_for("message", check=check, timeout=60)
+        except Exception:
+            await add_balance(interaction.user.id, shop_item["price"])
+            return await interaction.followup.send(
+                "Timed out. Your Sancs were refunded. Try buying the item again when you are ready.",
+                ephemeral=True
+            )
+
+        requested_emoji = msg.content.strip()
+
+        request_id = await create_custom_emoji_request(
+            interaction.user.id,
+            requested_emoji,
+            shop_item["price"]
+        )
+
+        log_sent = await send_custom_emoji_log(
+            interaction,
+            request_id,
+            requested_emoji,
+            shop_item["price"]
+        )
+
+        if not log_sent:
+            await add_balance(interaction.user.id, shop_item["price"])
+            return await interaction.followup.send(
+                "I could not send this to the staff log, so your Sancs were refunded. Ask an admin to check `/setgooslogchannel`.",
+                ephemeral=True
+            )
+
+        return await interaction.followup.send(
+            f"{CUSTOM_EMOJI_SHOP} Custom emoji request submitted: {requested_emoji}\n"
+            f"Staff will approve or deny it. If denied, your Sancs will be refunded.",
+            ephemeral=True
+        )
+
     if "crate_type" in shop_item:
         await add_loot_crate(interaction.user.id, shop_item["crate_type"], 1)
         emoji = LEGENDARY_CRATE_EMOJI if shop_item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
@@ -1881,6 +2188,8 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     bal = await get_balance(user.id)
     regular_crates, legendary_crates = await get_loot_crates(user.id)
     title = await get_title(user.id)
+    custom_emoji = await get_user_custom_emoji(user.id)
+    emoji_text = f" {custom_emoji}" if custom_emoji else ""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT cards.id, cards.name, cards.rarity, cards.is_active, COUNT(*) as amount
@@ -1899,7 +2208,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
             text += f"{BULLET_EMOJI} ID: {r['id']} {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
-    inventory_title = f"{title} {user.display_name}'s Inventory" if title else f"{user.display_name}'s Inventory"
+    inventory_title = f"{title} {user.display_name}{emoji_text}'s Inventory" if title else f"{user.display_name}{emoji_text}'s Inventory"
     embed = discord.Embed(
         title=inventory_title,
         description=text,
