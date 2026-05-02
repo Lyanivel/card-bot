@@ -271,6 +271,11 @@ async def setup_database():
                 staff_role_id BIGINT
             );
         """)
+
+        await conn.execute("""
+            ALTER TABLE server_settings
+            ADD COLUMN IF NOT EXISTS goos_log_channel_id BIGINT;
+        """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS drop_channels (
                 guild_id BIGINT NOT NULL,
@@ -298,6 +303,25 @@ async def set_staff_role_db(guild_id, role_id):
             ON CONFLICT (guild_id)
             DO UPDATE SET staff_role_id=$2
         """, guild_id, role_id)
+
+
+
+async def get_goos_log_channel(guild_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT goos_log_channel_id FROM server_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+
+async def set_goos_log_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO server_settings (guild_id, goos_log_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET goos_log_channel_id=$2
+        """, guild_id, channel_id)
 
 async def add_drop_channel_db(guild_id, channel_id):
     async with db_pool.acquire() as conn:
@@ -337,6 +361,36 @@ async def is_staff_member(interaction: discord.Interaction):
     if saved_staff_role_id:
         return any(role.id == saved_staff_role_id for role in interaction.user.roles)
     return is_staff(interaction.user)
+
+
+async def send_goos_log(interaction: discord.Interaction, request_id, shop_item):
+    if not interaction.guild:
+        return
+
+    channel_id = await get_goos_log_channel(interaction.guild.id)
+
+    if not channel_id:
+        return
+
+    channel = interaction.guild.get_channel(channel_id)
+
+    if not channel:
+        return
+
+    embed = discord.Embed(
+        title="New Goos Exchange Request",
+        description=(
+            f"**User:** {interaction.user.mention}\n"
+            f"**Request ID:** #{request_id}\n"
+            f"**Requested:** {shop_item['goos_amount']} Goos\n"
+            f"**Cost:** {format_coins(shop_item['price'])}\n"
+            f"**Status:** Paid"
+        ),
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="This request was created automatically after the user paid.")
+
+    await channel.send(embed=embed)
 
 def get_color(rarity):
     return {
@@ -1199,18 +1253,11 @@ class GoosExchangeSelect(discord.ui.Select):
             f"Request ID: **#{request_id}**\n"
             f"Requested: **{shop_item['goos_amount']} Goos**\n"
             f"Cost: **{format_coins(shop_item['price'])}**\n"
-            f"A staff member will need to fulfill this manually.",
+            f"A staff member will need to fulfill this manually. Please open a ticket and include your request ID.",
             ephemeral=True
         )
 
-        staff_ping = await get_staff_ping(interaction)
-        await interaction.channel.send(
-            f"{staff_ping} {interaction.user.mention} created a Goos exchange request.\n"
-            f"{BULLET_EMOJI} Request ID: **#{request_id}**\n"
-            f"{BULLET_EMOJI} Requested: **{shop_item['goos_amount']} Goos**\n"
-            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**",
-            allowed_mentions=discord.AllowedMentions(roles=True, users=True)
-        )
+        await send_goos_log(interaction, request_id, shop_item)
 
 class ExchangeItemView(discord.ui.View):
     def __init__(self):
@@ -1535,18 +1582,11 @@ async def buy(interaction: discord.Interaction, item: str):
             f"Request ID: **#{request_id}**\n"
             f"Requested: **{shop_item['goos_amount']} Goos**\n"
             f"Cost: **{format_coins(shop_item['price'])}**\n"
-            f"A staff member will need to fulfill this manually.",
+            f"A staff member will need to fulfill this manually. Please open a ticket and include your request ID.",
             ephemeral=True
         )
 
-        staff_ping = await get_staff_ping(interaction)
-        await interaction.channel.send(
-            f"{staff_ping} {interaction.user.mention} created a Goos exchange request.\n"
-            f"{BULLET_EMOJI} Request ID: **#{request_id}**\n"
-            f"{BULLET_EMOJI} Requested: **{shop_item['goos_amount']} Goos**\n"
-            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**",
-            allowed_mentions=discord.AllowedMentions(roles=True, users=True)
-        )
+        await send_goos_log(interaction, request_id, shop_item)
         return
     await interaction.response.send_message(
         f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
@@ -1851,6 +1891,22 @@ async def removecard(interaction: discord.Interaction, card_name: str):
         view=RemoveCardView(interaction.user, card),
         ephemeral=True
     )
+
+@bot.tree.command(name="setgooslogchannel", description="Admin only: set the staff log channel for Goos exchange requests.")
+@app_commands.describe(channel="Channel where Goos exchange requests should be logged")
+async def setgooslogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            "Only server administrators can set the Goos log channel.",
+            ephemeral=True
+        )
+
+    await set_goos_log_channel_db(interaction.guild.id, channel.id)
+
+    await interaction.response.send_message(
+        f"Goos exchange log channel set to {channel.mention}."
+    )
+
 
 @bot.tree.command(name="setstaffrole", description="Admin only: set the staff role for this server.")
 @app_commands.describe(role="Role allowed to use staff bot commands")
