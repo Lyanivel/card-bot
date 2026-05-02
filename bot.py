@@ -54,6 +54,7 @@ WEEKLY_BOOST_EMOJI = "<:weeklyboost:1499751780366684180>"
 LUCK_BOOST_EMOJI = "<:luckboost:1499715335253786745>"
 WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
 TITLE_EMOJI = "<:title:1499751841481752686>"
+SANC4OOS_EMOJI = "<:sanc4oos:1499901107986497717>"
 DAILY_BOOST_PERCENT = 25
 WEEKLY_BOOST_PERCENT = 20
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
@@ -65,6 +66,8 @@ DAILY_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859
 WEEKLY_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499878854502650068/95EFFB37-547A-4BBE-A436-1A2ED3777FC0.png"
 LUCK_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499879293239558285/B7FDEBBC-39D3-4FD0-862D-2F7D53C3AFDF.png"
 WHEEL_SPIN_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499879748657221682/BECC68AE-295F-4D03-BCFA-AED03E1C3BB1.png"
+TITLE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499880391606145244/19EC808A-8F5C-4990-9C1A-49AB16C156A2.png"
+SANC4OOS_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499902115605123243/0CC3FA91-214E-4938-B2A0-49605AD35984.png"
 AVAILABLE_TITLES = {
     "Sanction Elite": 5000,
     "Loot Goblin": 5000,
@@ -138,25 +141,32 @@ SHOP_ITEMS = {
         "category": "Cosmetics",
         "title_text": "Sanction Elite"
     },
+    "goosexchange": {
+        "name": "Sanc to Goos Exchange",
+        "price": 0,
+        "description": "Exchange Sancs for Goos. Choose an amount from the item details.",
+        "category": "Exchange",
+        "exchange_menu": True
+    },
     "goos100": {
         "name": "100 Goos Exchange",
         "price": 2500,
         "description": "Request 100 Goos. Staff must fulfill this manually.",
-        "category": "Exchange",
+        "category": "Hidden",
         "goos_amount": 100
     },
     "goos250": {
         "name": "250 Goos Exchange",
         "price": 6000,
         "description": "Request 250 Goos. Staff must fulfill this manually.",
-        "category": "Exchange",
+        "category": "Hidden",
         "goos_amount": 250
     },
     "goos500": {
         "name": "500 Goos Exchange",
         "price": 11000,
         "description": "Request 500 Goos. Staff must fulfill this manually.",
-        "category": "Exchange",
+        "category": "Hidden",
         "goos_amount": 500
     },
 }
@@ -366,7 +376,10 @@ def get_shop_item_emoji(item):
         return WHEEL_SPIN_EMOJI
     if "title_text" in item:
         return TITLE_EMOJI
+    if item.get("exchange_menu") or "goos_amount" in item:
+        return SANC4OOS_EMOJI
     return ""
+
 def get_shop_item_image(item_key):
     if item_key == "lootcrate":
         return LOOT_CRATE_IMAGE_URL
@@ -382,96 +395,126 @@ def get_shop_item_image(item_key):
         return LUCK_BOOST_IMAGE_URL
     if item_key == "wheelentry":
         return WHEEL_SPIN_IMAGE_URL
+    if item_key == "title":
+        return TITLE_IMAGE_URL
+    if item_key == "goosexchange" or item_key.startswith("goos"):
+        return TITLE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499880391606145244/19EC808A-8F5C-4990-9C1A-49AB16C156A2.png"
+SANC4OOS_IMAGE_URL
     return ""
+
 def create_shop_embed():
     categories = ["Crates", "Boosts", "Game Items", "Cosmetics", "Exchange"]
     text = ""
+
     for category in categories:
         items = [
             (key, item)
             for key, item in SHOP_ITEMS.items()
-            if item.get("category") == category
+            if item.get("category") == category and item.get("category") != "Hidden"
         ]
+
         if not items:
             continue
+
         text += f"**{category}**\n"
+
         for key, item in items:
             emoji = get_shop_item_emoji(item)
             emoji_text = f"{emoji} " if emoji else ""
-            text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}` [{format_coins(item['price'])}]\n"
+            price_text = f"[{format_coins(item['price'])}]" if item.get("price", 0) > 0 else "[Choose Amount]"
+            text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}` {price_text}\n"
+
     embed = discord.Embed(
         title="Shop",
         description=text or "The shop is currently empty.",
         color=discord.Color.from_str("#9e659d")
     )
     embed.set_footer(text="Choose an item below to view details.")
+
     return embed
+
 
 def create_shop_item_embed(item_key):
     item = SHOP_ITEMS[item_key]
     emoji = get_shop_item_emoji(item)
     image_url = get_shop_item_image(item_key)
-    details = f"**Price:** [{format_coins(item['price'])}]\n"
-    details += f"**Info:** {item['description']}\n\n"
-    if item.get("crate_type") == "regular":
-        details += (
-            "**Contains:**\n"
-            f"{BULLET_EMOJI} {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
-            f"{BULLET_EMOJI} 1 random card\n"
-        )
-    elif item.get("crate_type") == "legendary":
-        details += (
-            "**Contains:**\n"
-            f"{BULLET_EMOJI} {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
-            f"{BULLET_EMOJI} Higher rarity card odds\n"
-            f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n"
-        )
-    elif item.get("boost_type") == "luck":
-        details += (
-            "**Effect:**\n"
-            f"{BULLET_EMOJI} Lasts 1 hour\n"
-            f"{BULLET_EMOJI} Improves crate rarity odds while active\n"
-        )
-    elif "title_text" in item:
-        details += (
-            "**Title:**\n"
-            f"{BULLET_EMOJI} {item['title_text']}\n"
-            f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n"
-        )
-    elif "goos_amount" in item:
-        details += (
-            "**Exchange:**\n"
-            f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
-            f"{BULLET_EMOJI} Staff must fulfill this manually\n"
-        )
-    elif item.get("boost_type") == "daily":
-        details += (
-            "**Effect:**\n"
-            f"{BULLET_EMOJI} Adds {DAILY_BOOST_PERCENT}% to your next daily claim\n"
-            f"{BULLET_EMOJI} Used automatically the next time you claim /daily\n"
-        )
-    elif item.get("boost_type") == "weekly":
-        details += (
-            "**Effect:**\n"
-            f"{BULLET_EMOJI} Adds {WEEKLY_BOOST_PERCENT}% to your next weekly claim\n"
-            f"{BULLET_EMOJI} Used automatically the next time you claim /weekly\n"
-        )
-    elif item.get("manual_item"):
-        details += (
-            "**How it works:**\n"
-            f"{BULLET_EMOJI} This purchase is logged for staff\n"
-            f"{BULLET_EMOJI} Staff will manually apply or confirm this reward\n"
-        )
-    details += f"Use `/buy` and choose `{item['name']}` to purchase."
+
+    if item.get("exchange_menu"):
+        details = "**Exchange Options:**\n"
+        details += f"{BULLET_EMOJI} 100 Goos [{format_coins(SHOP_ITEMS['goos100']['price'])}]\n"
+        details += f"{BULLET_EMOJI} 250 Goos [{format_coins(SHOP_ITEMS['goos250']['price'])}]\n"
+        details += f"{BULLET_EMOJI} 500 Goos [{format_coins(SHOP_ITEMS['goos500']['price'])}]\n"
+        details += f"{BULLET_EMOJI} Staff must fulfill Goos manually\n"
+        details += "Choose an amount from the dropdown below."
+    else:
+        details = f"**Price:** [{format_coins(item['price'])}]\n"
+        details += f"**Info:** {item['description']}\n\n"
+
+        if item.get("crate_type") == "regular":
+            details += (
+                "**Contains:**\n"
+                f"{BULLET_EMOJI} {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
+                f"{BULLET_EMOJI} 1 random card\n"
+            )
+        elif item.get("crate_type") == "legendary":
+            details += (
+                "**Contains:**\n"
+                f"{BULLET_EMOJI} {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
+                f"{BULLET_EMOJI} Higher rarity card odds\n"
+                f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n"
+            )
+        elif item.get("boost_type") == "luck":
+            details += (
+                "**Effect:**\n"
+                f"{BULLET_EMOJI} Lasts 1 hour\n"
+                f"{BULLET_EMOJI} Improves crate rarity odds while active\n"
+            )
+        elif item.get("boost_type") == "daily":
+            details += (
+                "**Effect:**\n"
+                f"{BULLET_EMOJI} Adds {DAILY_BOOST_PERCENT}% to your next daily claim\n"
+                f"{BULLET_EMOJI} Used automatically the next time you claim /daily\n"
+            )
+        elif item.get("boost_type") == "weekly":
+            details += (
+                "**Effect:**\n"
+                f"{BULLET_EMOJI} Adds {WEEKLY_BOOST_PERCENT}% to your next weekly claim\n"
+                f"{BULLET_EMOJI} Used automatically the next time you claim /weekly\n"
+            )
+        elif "title_text" in item:
+            details += (
+                "**Title:**\n"
+                f"{BULLET_EMOJI} {item['title_text']}\n"
+                f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n"
+            )
+        elif item.get("manual_item"):
+            details += (
+                "**How it works:**\n"
+                f"{BULLET_EMOJI} This purchase is logged for staff\n"
+                f"{BULLET_EMOJI} Staff will manually apply or confirm this reward\n"
+            )
+        elif "goos_amount" in item:
+            details += (
+                "**Exchange:**\n"
+                f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
+                f"{BULLET_EMOJI} Staff must fulfill this manually\n"
+            )
+
+        details += f"Use `/buy` and choose `{item['name']}` to purchase."
+
     embed_title = f"{emoji} {item['name']}" if emoji else item["name"]
+
     embed = discord.Embed(
         title=embed_title,
         description=details,
         color=discord.Color.from_str("#9e659d")
     )
+
     if image_url:
         embed.set_thumbnail(url=image_url)
+
     embed.set_footer(text="Use the button below to return to the full shop list.")
+
     return embed
 
 def card_label(card):
@@ -939,8 +982,9 @@ async def shop_autocomplete(interaction: discord.Interaction, current: str):
     return [
         app_commands.Choice(name=item["name"], value=key)
         for key, item in SHOP_ITEMS.items()
-        if current.lower() in item["name"].lower() or current.lower() in key.lower()
+        if key != "goosexchange" and (current.lower() in item["name"].lower() or current.lower() in key.lower())
     ][:25]
+
 
 # ---------------- AUTO DROP ----------------
 async def choose_random_card():
@@ -1110,11 +1154,72 @@ class RemoveCardView(discord.ui.View):
         )
 
 # ---------------- SHOP UI ----------------
+class GoosExchangeSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="100 Goos", value="goos100", description="2,500 Sancs"),
+            discord.SelectOption(label="250 Goos", value="goos250", description="6,000 Sancs"),
+            discord.SelectOption(label="500 Goos", value="goos500", description="11,000 Sancs"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a Goos exchange amount...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        item_key = self.values[0]
+        shop_item = SHOP_ITEMS[item_key]
+        success = await subtract_balance(interaction.user.id, shop_item["price"])
+
+        if not success:
+            return await interaction.response.send_message(
+                f"You do not have enough currency. This costs **{format_coins(shop_item['price'])}**.",
+                ephemeral=True
+            )
+
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO purchases (user_id, item_key, item_name, price)
+                VALUES ($1, $2, $3, $4)
+            """, interaction.user.id, item_key, shop_item["name"], shop_item["price"])
+
+        request_id = await create_goos_request(
+            interaction.user.id,
+            shop_item["goos_amount"],
+            shop_item["price"]
+        )
+
+        await interaction.response.send_message(
+            f"{SANC4OOS_EMOJI} Goos exchange request created!\n"
+            f"Request ID: **#{request_id}**\n"
+            f"Requested: **{shop_item['goos_amount']} Goos**\n"
+            f"Cost: **{format_coins(shop_item['price'])}**\n"
+            f"A staff member will need to fulfill this manually.",
+            ephemeral=True
+        )
+
+
+class ExchangeItemView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(GoosExchangeSelect())
+
+    @discord.ui.button(label="Back to Shop", style=discord.ButtonStyle.secondary)
+    async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=create_shop_embed(), view=ShopView())
+
+
 class ShopSelect(discord.ui.Select):
     def __init__(self):
         options = []
 
         for key, item in SHOP_ITEMS.items():
+            if item.get("category") == "Hidden":
+                continue
+
             options.append(
                 discord.SelectOption(
                     label=item["name"],
@@ -1133,7 +1238,11 @@ class ShopSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         item_key = self.values[0]
         embed = create_shop_item_embed(item_key)
-        await interaction.response.edit_message(embed=embed, view=BackToShopView())
+
+        if item_key == "goosexchange":
+            await interaction.response.edit_message(embed=embed, view=ExchangeItemView())
+        else:
+            await interaction.response.edit_message(embed=embed, view=BackToShopView())
 
 class ShopView(discord.ui.View):
     def __init__(self):
