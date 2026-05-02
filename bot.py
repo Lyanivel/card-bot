@@ -54,7 +54,7 @@ WEEKLY_BOOST_EMOJI = "<:weeklyboost:1499751780366684180>"
 LUCK_BOOST_EMOJI = "<:luckboost:1499715335253786745>"
 WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
 TITLE_EMOJI = "<:title:1499751841481752686>"
-SANC4OOS_EMOJI = "<:sanc4oos:1499901107986497717>"
+SANC4OOS_EMOJI = "<<:sanc4oos:1499901107986497717>1499901107986497717>"
 DAILY_BOOST_PERCENT = 25
 WEEKLY_BOOST_PERCENT = 20
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
@@ -1200,6 +1200,14 @@ class GoosExchangeSelect(discord.ui.Select):
             ephemeral=True
         )
 
+        staff_ping = await get_staff_ping(interaction)
+        await interaction.followup.send(
+            f"{staff_ping} {interaction.user.mention} created a Goos exchange request.\n"
+            f"{BULLET_EMOJI} Request ID: **#{request_id}**\n"
+            f"{BULLET_EMOJI} Requested: **{shop_item['goos_amount']} Goos**\n"
+            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**"
+        )
+
 
 class ExchangeItemView(discord.ui.View):
     def __init__(self):
@@ -1519,13 +1527,23 @@ async def buy(interaction: discord.Interaction, item: str):
             shop_item["goos_amount"],
             shop_item["price"]
         )
-        return await interaction.response.send_message(
-            f"Goos exchange request created!\n"
+        await interaction.response.send_message(
+            f"{SANC4OOS_EMOJI} Goos exchange request created!\n"
             f"Request ID: **#{request_id}**\n"
             f"Requested: **{shop_item['goos_amount']} Goos**\n"
             f"Cost: **{format_coins(shop_item['price'])}**\n"
-            f"A staff member will need to fulfill this manually."
+            f"A staff member will need to fulfill this manually.",
+            ephemeral=True
         )
+
+        staff_ping = await get_staff_ping(interaction)
+        await interaction.followup.send(
+            f"{staff_ping} {interaction.user.mention} created a Goos exchange request.\n"
+            f"{BULLET_EMOJI} Request ID: **#{request_id}**\n"
+            f"{BULLET_EMOJI} Requested: **{shop_item['goos_amount']} Goos**\n"
+            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**"
+        )
+        return
     await interaction.response.send_message(
         f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
     )
