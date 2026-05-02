@@ -53,6 +53,7 @@ DAILY_BOOST_EMOJI = "<:dailyboost:1499751908754198609>"
 WEEKLY_BOOST_EMOJI = "<:weeklyboost:1499751780366684180>"
 LUCK_BOOST_EMOJI = "<:luckboost:1499715335253786745>"
 WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
+TITLE_EMOJI = "<:title:1499751841481752686>"
 DAILY_BOOST_PERCENT = 25
 WEEKLY_BOOST_PERCENT = 20
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
@@ -363,6 +364,8 @@ def get_shop_item_emoji(item):
         return MAFIA_IMMUNITY_EMOJI
     if item.get("name") == "Wheel Bonus Entry":
         return WHEEL_SPIN_EMOJI
+    if "title_text" in item:
+        return TITLE_EMOJI
     return ""
 def get_shop_item_image(item_key):
     if item_key == "lootcrate":
@@ -1112,21 +1115,11 @@ class ShopSelect(discord.ui.Select):
         options = []
 
         for key, item in SHOP_ITEMS.items():
-            emoji_code = get_shop_item_emoji(item)
-            option_emoji = None
-
-            if emoji_code:
-                try:
-                    option_emoji = discord.PartialEmoji.from_str(emoji_code)
-                except Exception:
-                    option_emoji = None
-
             options.append(
                 discord.SelectOption(
                     label=item["name"],
                     value=key,
-                    description=item["description"][:100],
-                    emoji=option_emoji
+                    description=item["description"][:100]
                 )
             )
 
