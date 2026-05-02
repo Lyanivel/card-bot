@@ -415,14 +415,10 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
 
     channel = interaction.guild.get_channel(channel_id)
     if channel is None:
-        channel = bot.get_channel(channel_id)
-    if channel is None:
         try:
             channel = await bot.fetch_channel(channel_id)
         except Exception:
             return False
-
-    staff_ping = await get_staff_ping(interaction)
 
     embed = create_goos_log_embed_from_values(
         buyer_id=interaction.user.id,
@@ -430,6 +426,8 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
         goos_amount=shop_item["goos_amount"],
         sancs_cost=shop_item["price"]
     )
+
+    staff_ping = await get_staff_ping(interaction)
 
     await channel.send(
         content=staff_ping,
@@ -444,6 +442,872 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
     )
 
     return True
+
+
+def get_color(rarity):
+    return {
+        "Common": discord.Color.from_str("#8b8b8b"),
+        "Rare": discord.Color.from_str("#5c8df6"),
+        "Epic": discord.Color.from_str("#9e659d"),
+        "Legendary": discord.Color.from_str("#f5c542"),
+    }.get(rarity, discord.Color.blurple())
+
+def format_coins(amount: int):
+    return f"{CURRENCY_EMOJI} {amount:,}"
+
+def eastern_day_number():
+    now = datetime.now(ZoneInfo("America/New_York"))
+    return int(now.strftime("%Y%m%d"))
+
+def previous_eastern_day_number(today: int):
+    current_date = datetime.strptime(str(today), "%Y%m%d")
+    previous_date = current_date - timedelta(days=1)
+    return int(previous_date.strftime("%Y%m%d"))
+
+def format_title(title):
+    return title if title else "None"
+
+def get_shop_item_emoji(item):
+    if item.get("crate_type") == "regular":
+        return LOOT_CRATE_EMOJI
+    if item.get("crate_type") == "legendary":
+        return LEGENDARY_CRATE_EMOJI
+    if item.get("boost_type") == "luck":
+        return LUCK_BOOST_EMOJI
+    if item.get("boost_type") == "daily":
+        return DAILY_BOOST_EMOJI
+    if item.get("boost_type") == "weekly":
+        return WEEKLY_BOOST_EMOJI
+    if item.get("name") == "Mafia Immunity":
+        return MAFIA_IMMUNITY_EMOJI
+    if item.get("name") == "Wheel Bonus Entry":
+        return WHEEL_SPIN_EMOJI
+    if "title_text" in item:
+        return TITLE_EMOJI
+    if item.get("exchange_menu") or "goos_amount" in item:
+        return SANC4OOS_EMOJI
+    return ""
+
+def get_shop_item_image(item_key):
+    if item_key == "lootcrate":
+        return LOOT_CRATE_IMAGE_URL
+    if item_key == "legendarycrate":
+        return LEGENDARY_CRATE_IMAGE_URL
+    if item_key == "mafiaimmunity":
+        return MAFIA_IMMUNITY_IMAGE_URL
+    if item_key == "dailyboost":
+        return DAILY_BOOST_IMAGE_URL
+    if item_key == "weeklyboost":
+        return WEEKLY_BOOST_IMAGE_URL
+    if item_key == "luckboost":
+        return LUCK_BOOST_IMAGE_URL
+    if item_key == "wheelentry":
+        return WHEEL_SPIN_IMAGE_URL
+    if item_key == "title":
+        return TITLE_IMAGE_URL
+    if item_key == "goosexchange" or item_key.startswith("goos"):
+        return SANC4OOS_IMAGE_URL
+    return ""
+
+def create_shop_embed():
+    categories = ["Crates", "Boosts", "Game Items", "Cosmetics", "Exchange"]
+    text = ""
+
+    for category in categories:
+        items = [
+            (key, item)
+            for key, item in SHOP_ITEMS.items()
+            if item.get("category") == category and item.get("category") != "Hidden"
+        ]
+
+        if not items:
+            continue
+
+        text += f"**{category}**\n"
+
+        for key, item in items:
+            emoji = get_shop_item_emoji(item)
+            emoji_text = f"{emoji} " if emoji else ""
+            price_text = f"[{format_coins(item['price'])}]" if item.get("price", 0) > 0 else "[Choose Amount]"
+            text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}` {price_text}\n"
+
+    embed = discord.Embed(
+        title="Shop",
+        description=text or "The shop is currently empty.",
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=SHOP_ICON_URL)
+    embed.set_footer(text="Choose an item below to view details.")
+
+    return embed
+
+
+def create_shop_item_embed(item_key):
+    item = SHOP_ITEMS[item_key]
+    emoji = get_shop_item_emoji(item)
+    image_url = get_shop_item_image(item_key)
+
+    if item.get("exchange_menu"):
+        details = "**Exchange Options:**\n"
+        details += f"{BULLET_EMOJI} 100 Goos [{format_coins(SHOP_ITEMS['goos100']['price'])}]\n"
+        details += f"{BULLET_EMOJI} 250 Goos [{format_coins(SHOP_ITEMS['goos250']['price'])}]\n"
+        details += f"{BULLET_EMOJI} 500 Goos [{format_coins(SHOP_ITEMS['goos500']['price'])}]\n"
+        details += f"{BULLET_EMOJI} Staff must fulfill Goos manually\n"
+        details += "Choose an amount from the dropdown below."
+    else:
+        details = f"**Price:** [{format_coins(item['price'])}]\n"
+        details += f"**Info:** {item['description']}\n\n"
+
+        if item.get("crate_type") == "regular":
+            details += (
+                "**Contains:**\n"
+                f"{BULLET_EMOJI} {format_coins(REGULAR_CRATE_MIN)} to {REGULAR_CRATE_MAX:,}\n"
+                f"{BULLET_EMOJI} 1 random card\n"
+            )
+        elif item.get("crate_type") == "legendary":
+            details += (
+                "**Contains:**\n"
+                f"{BULLET_EMOJI} {format_coins(LEGENDARY_CRATE_MIN)} to {LEGENDARY_CRATE_MAX:,}\n"
+                f"{BULLET_EMOJI} Higher rarity card odds\n"
+                f"{BULLET_EMOJI} {LEGENDARY_SECOND_CARD_CHANCE}% chance for a bonus card\n"
+            )
+        elif item.get("boost_type") == "luck":
+            details += (
+                "**Effect:**\n"
+                f"{BULLET_EMOJI} Lasts 1 hour\n"
+                f"{BULLET_EMOJI} Improves crate rarity odds while active\n"
+            )
+        elif item.get("boost_type") == "daily":
+            details += (
+                "**Effect:**\n"
+                f"{BULLET_EMOJI} Adds {DAILY_BOOST_PERCENT}% to your next daily claim\n"
+                f"{BULLET_EMOJI} Used automatically the next time you claim /daily\n"
+            )
+        elif item.get("boost_type") == "weekly":
+            details += (
+                "**Effect:**\n"
+                f"{BULLET_EMOJI} Adds {WEEKLY_BOOST_PERCENT}% to your next weekly claim\n"
+                f"{BULLET_EMOJI} Used automatically the next time you claim /weekly\n"
+            )
+        elif "title_text" in item:
+            details += (
+                "**Title:**\n"
+                f"{BULLET_EMOJI} {item['title_text']}\n"
+                f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n"
+            )
+        elif item.get("manual_item"):
+            details += (
+                "**How it works:**\n"
+                f"{BULLET_EMOJI} This purchase is logged for staff\n"
+                f"{BULLET_EMOJI} Staff will manually apply or confirm this reward\n"
+            )
+        elif "goos_amount" in item:
+            details += (
+                "**Exchange:**\n"
+                f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
+                f"{BULLET_EMOJI} Staff must fulfill this manually\n"
+            )
+
+        details += f"Use `/buy` and choose `{item['name']}` to purchase."
+
+    embed_title = f"{emoji} {item['name']}" if emoji else item["name"]
+
+    embed = discord.Embed(
+        title=embed_title,
+        description=details,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    if image_url:
+        embed.set_thumbnail(url=image_url)
+
+    embed.set_footer(text="Use the button below to return to the full shop list.")
+
+    return embed
+
+def card_label(card):
+    return f"ID: {card['id']} {card['name']} ({card['rarity']})"
+
+def format_card_line(card, amount=None, limited_note=""):
+    amount_text = f" x{amount}" if amount is not None else ""
+    return f"ID: {card['id']} {card['name']} ({card['rarity']}){amount_text}{limited_note}"
+
+def clean_card_ref(card_ref: str):
+    return card_ref.strip().replace("#", "").replace("ID", "").replace("id", "").strip()
+
+def create_card_embed(card):
+    embed = discord.Embed(
+        title=f"{card['rarity']} Card Drop!",
+        description=f"**{card['name']}** appeared!\n`ID: {card['id']}`",
+        color=get_color(card["rarity"])
+    )
+    embed.set_image(url=card["image"])
+    return embed
+
+async def log_removed_card(interaction: discord.Interaction, card):
+    if REMOVED_CARD_LOG_CHANNEL_ID == 0:
+        return
+    channel = interaction.guild.get_channel(REMOVED_CARD_LOG_CHANNEL_ID)
+    if not channel:
+        return
+    embed = discord.Embed(
+        title="Card Removed From Future Drops",
+        description=(
+            f"**Card:** {card['name']}\n"
+            f"**ID:** {card['id']}\n"
+            f"**Rarity:** {card['rarity']}\n"
+            f"**Removed by:** {interaction.user.mention}\n\n"
+            f"Members who already own this card will keep it."
+        ),
+        color=discord.Color.red()
+    )
+    await channel.send(embed=embed)
+
+# ---------------- CARD FUNCTIONS ----------------
+async def get_card_by_name(name):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM cards WHERE LOWER(name)=LOWER($1)",
+            name
+        )
+
+async def get_card_by_id(card_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM cards WHERE id=$1",
+            card_id
+        )
+
+async def get_card_by_ref(card_ref):
+    cleaned = clean_card_ref(str(card_ref))
+    if cleaned.isdigit():
+        card = await get_card_by_id(int(cleaned))
+        if card:
+            return card
+    return await get_card_by_name(str(card_ref))
+
+async def get_active_card_by_ref(card_ref):
+    cleaned = clean_card_ref(str(card_ref))
+    async with db_pool.acquire() as conn:
+        if cleaned.isdigit():
+            return await conn.fetchrow(
+                "SELECT * FROM cards WHERE id=$1 AND is_active = TRUE",
+                int(cleaned)
+            )
+        return await conn.fetchrow(
+            "SELECT * FROM cards WHERE LOWER(name)=LOWER($1) AND is_active = TRUE",
+            str(card_ref)
+        )
+
+async def get_all_cards():
+    async with db_pool.acquire() as conn:
+        return await conn.fetch("SELECT * FROM cards ORDER BY id")
+
+async def get_active_cards():
+    async with db_pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM cards WHERE is_active = TRUE ORDER BY id"
+        )
+
+async def add_card_to_inventory(user_id, card_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO inventory (user_id, card_id) VALUES ($1,$2)",
+            user_id,
+            card_id
+        )
+
+async def user_owns_card(user_id, card_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT 1 FROM inventory WHERE user_id=$1 AND card_id=$2",
+            user_id,
+            card_id
+        )
+
+async def get_user_active_cards(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT DISTINCT cards.id, cards.name, cards.rarity
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE inventory.user_id=$1
+            AND cards.is_active = TRUE
+            ORDER BY cards.id
+        """, user_id)
+
+async def get_user_owned_cards_for_sell(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT DISTINCT cards.id, cards.name, cards.rarity
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE inventory.user_id=$1
+            ORDER BY cards.id
+        """, user_id)
+
+async def trade_cards(u1, c1, u2, c2):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            a = await conn.fetchrow(
+                "SELECT id FROM inventory WHERE user_id=$1 AND card_id=$2 LIMIT 1 FOR UPDATE",
+                u1, c1
+            )
+            b = await conn.fetchrow(
+                "SELECT id FROM inventory WHERE user_id=$1 AND card_id=$2 LIMIT 1 FOR UPDATE",
+                u2, c2
+            )
+            if not a:
+                return False, "Requester no longer owns card."
+            if not b:
+                return False, "Target no longer owns card."
+            await conn.execute("UPDATE inventory SET user_id=$1 WHERE id=$2", u2, a["id"])
+            await conn.execute("UPDATE inventory SET user_id=$1 WHERE id=$2", u1, b["id"])
+            return True, "Trade completed!"
+
+# ---------------- CURRENCY FUNCTIONS ----------------
+async def get_balance(user_id):
+    async with db_pool.acquire() as conn:
+        balance = await conn.fetchval(
+            "SELECT balance FROM balances WHERE user_id=$1",
+            user_id
+        )
+        if balance is None:
+            await conn.execute(
+                "INSERT INTO balances (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+            return 0
+        return balance
+
+async def add_balance(user_id, amount):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO balances (user_id, balance)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET balance = balances.balance + $2
+        """, user_id, amount)
+
+async def subtract_balance(user_id, amount):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            balance = await conn.fetchval(
+                "SELECT balance FROM balances WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+            if balance is None:
+                balance = 0
+                await conn.execute(
+                    "INSERT INTO balances (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+                    user_id
+                )
+            if balance < amount:
+                return False
+            await conn.execute(
+                "UPDATE balances SET balance = balance - $1 WHERE user_id=$2",
+                amount,
+                user_id
+            )
+            return True
+
+async def transfer_balance(sender_id, receiver_id, amount):
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            sender_balance = await conn.fetchval(
+                "SELECT balance FROM balances WHERE user_id=$1 FOR UPDATE",
+                sender_id
+            )
+            if sender_balance is None:
+                sender_balance = 0
+                await conn.execute(
+                    "INSERT INTO balances (user_id, balance) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING",
+                    sender_id
+                )
+            if sender_balance < amount:
+                return False
+            await conn.execute(
+                "UPDATE balances SET balance = balance - $1 WHERE user_id=$2",
+                amount,
+                sender_id
+            )
+            await conn.execute("""
+                INSERT INTO balances (user_id, balance)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id)
+                DO UPDATE SET balance = balances.balance + $2
+            """, receiver_id, amount)
+            return True
+
+async def get_cooldown(user_id, command_name):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT last_used FROM cooldowns WHERE user_id=$1 AND command_name=$2",
+            user_id,
+            command_name
+        )
+
+async def set_cooldown(user_id, command_name):
+    now = int(time.time())
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO cooldowns (user_id, command_name, last_used)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, command_name)
+            DO UPDATE SET last_used=$3
+        """, user_id, command_name, now)
+
+async def update_daily_streak(user_id):
+    today = eastern_day_number()
+    yesterday = previous_eastern_day_number(today)
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT streak_count, last_claim_day FROM daily_streaks WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+            if not row:
+                streak = 1
+                await conn.execute(
+                    "INSERT INTO daily_streaks (user_id, streak_count, last_claim_day) VALUES ($1, $2, $3)",
+                    user_id,
+                    streak,
+                    today
+                )
+                return streak
+            last_day = row["last_claim_day"]
+            old_streak = row["streak_count"]
+            if last_day == today:
+                return old_streak
+            if last_day == yesterday:
+                streak = old_streak + 1
+            else:
+                streak = 1
+            await conn.execute(
+                "UPDATE daily_streaks SET streak_count=$1, last_claim_day=$2 WHERE user_id=$3",
+                streak,
+                today,
+                user_id
+            )
+            return streak
+
+async def sell_one_card(user_id, card_ref):
+    card = await get_card_by_ref(card_ref)
+    if not card:
+        return False, None, 0
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            card_entry = await conn.fetchrow("""
+                SELECT inventory.id AS inventory_id, cards.id AS card_id, cards.name, cards.rarity
+                FROM inventory
+                JOIN cards ON cards.id = inventory.card_id
+                WHERE inventory.user_id=$1
+                AND cards.id=$2
+                LIMIT 1
+                FOR UPDATE
+            """, user_id, card["id"])
+            if not card_entry:
+                return False, None, 0
+            value = SELL_VALUES.get(card_entry["rarity"], 10)
+            await conn.execute(
+                "DELETE FROM inventory WHERE id=$1",
+                card_entry["inventory_id"]
+            )
+            await conn.execute("""
+                INSERT INTO balances (user_id, balance)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id)
+                DO UPDATE SET balance = balances.balance + $2
+            """, user_id, value)
+            return True, card_entry, value
+
+# ---------------- BOOST / TITLE FUNCTIONS ----------------
+async def get_active_boost(user_id, boost_type):
+    now = int(time.time())
+    async with db_pool.acquire() as conn:
+        expires_at = await conn.fetchval(
+            "SELECT expires_at FROM user_boosts WHERE user_id=$1 AND boost_type=$2",
+            user_id,
+            boost_type
+        )
+        if not expires_at:
+            return None
+        if expires_at <= now:
+            await conn.execute(
+                "DELETE FROM user_boosts WHERE user_id=$1 AND boost_type=$2",
+                user_id,
+                boost_type
+            )
+            return None
+        return expires_at
+
+async def set_boost(user_id, boost_type, duration_seconds):
+    expires_at = int(time.time()) + duration_seconds
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_boosts (user_id, boost_type, expires_at)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, boost_type)
+            DO UPDATE SET expires_at=$3
+        """, user_id, boost_type, expires_at)
+    return expires_at
+
+async def clear_boost(user_id, boost_type):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM user_boosts WHERE user_id=$1 AND boost_type=$2",
+            user_id,
+            boost_type
+        )
+
+async def get_title(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT title FROM user_titles WHERE user_id=$1",
+            user_id
+        )
+
+async def set_title(user_id, title):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_titles (user_id, title)
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET title=$2
+        """, user_id, title)
+
+async def create_goos_request(user_id, goos_amount, cost):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval("""
+            INSERT INTO goos_exchange_requests (user_id, goos_amount, sancs_cost)
+            VALUES ($1, $2, $3)
+            RETURNING id
+        """, user_id, goos_amount, cost)
+
+
+
+async def claim_goos_request(request_id, staff_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, claimed_by FROM goos_exchange_requests WHERE id=$1",
+            request_id
+        )
+
+        if not row:
+            return False, "That request was not found."
+
+        if row["status"] == "completed":
+            return False, "That request is already completed."
+
+        if row["claimed_by"]:
+            return False, "That request has already been claimed."
+
+        await conn.execute("""
+            UPDATE goos_exchange_requests
+            SET status='claimed', claimed_by=$1, claimed_at=CURRENT_TIMESTAMP
+            WHERE id=$2
+        """, staff_id, request_id)
+
+        return True, "Request claimed."
+
+
+async def complete_goos_request(request_id, staff_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status FROM goos_exchange_requests WHERE id=$1",
+            request_id
+        )
+
+        if not row:
+            return False, "That request was not found."
+
+        if row["status"] == "completed":
+            return False, "That request is already completed."
+
+        await conn.execute("""
+            UPDATE goos_exchange_requests
+            SET status='completed', completed_by=$1, completed_at=CURRENT_TIMESTAMP
+            WHERE id=$2
+        """, staff_id, request_id)
+
+        return True, "Request completed."
+
+# ---------------- LOOT CRATE FUNCTIONS ----------------
+async def get_loot_crates(user_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT regular_count, legendary_count FROM loot_crates WHERE user_id=$1",
+            user_id
+        )
+        if not row:
+            await conn.execute(
+                "INSERT INTO loot_crates (user_id, regular_count, legendary_count) VALUES ($1, 0, 0) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+            return 0, 0
+        return row["regular_count"], row["legendary_count"]
+
+async def add_loot_crate(user_id, crate_type="regular", amount=1):
+    column = "legendary_count" if crate_type == "legendary" else "regular_count"
+    async with db_pool.acquire() as conn:
+        await conn.execute(f"""
+            INSERT INTO loot_crates (user_id, {column})
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET {column} = loot_crates.{column} + $2
+        """, user_id, amount)
+
+async def remove_loot_crate(user_id, crate_type="regular"):
+    column = "legendary_count" if crate_type == "legendary" else "regular_count"
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            count = await conn.fetchval(
+                f"SELECT {column} FROM loot_crates WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+            if count is None:
+                await conn.execute(
+                    "INSERT INTO loot_crates (user_id, regular_count, legendary_count) VALUES ($1, 0, 0) ON CONFLICT (user_id) DO NOTHING",
+                    user_id
+                )
+                return False
+            if count <= 0:
+                return False
+            await conn.execute(
+                f"UPDATE loot_crates SET {column} = {column} - 1 WHERE user_id=$1",
+                user_id
+            )
+            return True
+
+async def choose_random_card_with_weights(weights):
+    rarity = random.choices(
+        ["Common", "Rare", "Epic", "Legendary"],
+        weights=weights,
+        k=1
+    )[0]
+    async with db_pool.acquire() as conn:
+        cards = await conn.fetch(
+            "SELECT * FROM cards WHERE rarity=$1 AND is_active = TRUE",
+            rarity
+        )
+        if cards:
+            return random.choice(cards)
+        fallback_cards = await conn.fetch(
+            "SELECT * FROM cards WHERE is_active = TRUE"
+        )
+        if not fallback_cards:
+            return None
+        return random.choice(fallback_cards)
+
+async def choose_regular_crate_card(user_id=None):
+    if user_id and await get_active_boost(user_id, "luck"):
+        return await choose_random_card_with_weights([45, 30, 17, 8])
+    return await choose_random_card_with_weights([60, 25, 10, 5])
+
+async def choose_legendary_crate_card(user_id=None):
+    if user_id and await get_active_boost(user_id, "luck"):
+        return await choose_random_card_with_weights([15, 30, 30, 25])
+    return await choose_random_card_with_weights([25, 35, 25, 15])
+
+# ---------------- AUTOCOMPLETE ----------------
+async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_user_active_cards(interaction.user.id)
+    return [
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        for card in cards
+        if current.lower() in card_label(card).lower()
+    ][:25]
+
+async def sell_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_user_owned_cards_for_sell(interaction.user.id)
+    return [
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        for card in cards
+        if current.lower() in card_label(card).lower()
+    ][:25]
+
+async def all_active_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_active_cards()
+    return [
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        for card in cards
+        if current.lower() in card_label(card).lower()
+    ][:25]
+
+async def shop_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=item["name"], value=key)
+        for key, item in SHOP_ITEMS.items()
+        if key != "goosexchange" and (current.lower() in item["name"].lower() or current.lower() in key.lower())
+    ][:25]
+
+
+# ---------------- AUTO DROP ----------------
+async def choose_random_card():
+    rarity = random.choices(
+        ["Common", "Rare", "Epic", "Legendary"],
+        weights=[60, 25, 10, 5],
+        k=1
+    )[0]
+    async with db_pool.acquire() as conn:
+        cards = await conn.fetch(
+            "SELECT * FROM cards WHERE rarity=$1 AND is_active = TRUE",
+            rarity
+        )
+        if cards:
+            return random.choice(cards)
+        fallback_cards = await conn.fetch(
+            "SELECT * FROM cards WHERE is_active = TRUE"
+        )
+        if not fallback_cards:
+            return None
+        return random.choice(fallback_cards)
+
+@tasks.loop(minutes=AUTO_DROP_MINUTES)
+async def auto_drop():
+    if random.randint(1, 100) > AUTO_DROP_CHANCE:
+        return
+    saved_channel_ids = await get_all_drop_channel_ids()
+    possible_channel_ids = saved_channel_ids or DROP_CHANNEL_IDS
+    if not possible_channel_ids:
+        return
+    channel = bot.get_channel(random.choice(possible_channel_ids))
+    if not channel:
+        return
+    card = await choose_random_card()
+    if not card:
+        return
+    await channel.send(embed=create_card_embed(card), view=ClaimView(card))
+
+# ---------------- CLAIM SYSTEM ----------------
+class ClaimView(discord.ui.View):
+    def __init__(self, card):
+        super().__init__(timeout=60)
+        self.card = card
+        self.claimed = False
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.green)
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        uid = interaction.user.id
+        now = time.time()
+        if uid in last_claim_times:
+            if now - last_claim_times[uid] < CLAIM_COOLDOWN:
+                remaining = int(CLAIM_COOLDOWN - (now - last_claim_times[uid]))
+                await interaction.response.send_message(
+                    f"You are on cooldown. Try again in {remaining}s.",
+                    ephemeral=True
+                )
+                return
+        if self.claimed:
+            await interaction.response.send_message("Already claimed.", ephemeral=True)
+            return
+        self.claimed = True
+        last_claim_times[uid] = now
+        button.disabled = True
+        await add_card_to_inventory(uid, self.card["id"])
+        found_crate = random.randint(1, 100) <= CLAIM_LOOT_CRATE_CHANCE
+        if found_crate:
+            await add_loot_crate(uid, "regular", 1)
+        content = f"{interaction.user.mention} claimed **{self.card['name']}**! `ID: {self.card['id']}`"
+        if found_crate:
+            content += f"\n{GIFT_BOX_EMOJI} You found a Loot Crate! Use `/opencrate`"
+        await interaction.response.edit_message(
+            content=content,
+            view=self
+        )
+
+# ---------------- TRADE SYSTEM ----------------
+class TradeView(discord.ui.View):
+    def __init__(self, requester, target, requester_card, target_card):
+        super().__init__(timeout=120)
+        self.requester = requester
+        self.target = target
+        self.requester_card = requester_card
+        self.target_card = target_card
+        self.finished = False
+        active_trade_card_ids.add(requester_card["id"])
+        active_trade_card_ids.add(target_card["id"])
+    def clear_active_trade_cards(self):
+        active_trade_card_ids.discard(self.requester_card["id"])
+        active_trade_card_ids.discard(self.target_card["id"])
+    async def on_timeout(self):
+        self.finished = True
+        self.clear_active_trade_cards()
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.target.id:
+            return await interaction.response.send_message("Not your trade.", ephemeral=True)
+        if self.finished:
+            return await interaction.response.send_message("This trade is already finished.", ephemeral=True)
+        success, msg = await trade_cards(
+            self.requester.id,
+            self.requester_card["id"],
+            self.target.id,
+            self.target_card["id"]
+        )
+        self.finished = True
+        self.clear_active_trade_cards()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content=msg, embed=None, view=self)
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.target.id:
+            return await interaction.response.send_message("Not your trade.", ephemeral=True)
+        if self.finished:
+            return await interaction.response.send_message("This trade is already finished.", ephemeral=True)
+        self.finished = True
+        self.clear_active_trade_cards()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(content="Trade declined.", embed=None, view=self)
+
+# ---------------- REMOVE CARD CONFIRMATION ----------------
+class RemoveCardView(discord.ui.View):
+    def __init__(self, requester, card):
+        super().__init__(timeout=60)
+        self.requester = requester
+        self.card = card
+        self.finished = False
+    @discord.ui.button(label="Confirm Remove", style=discord.ButtonStyle.red)
+    async def confirm_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester.id:
+            return await interaction.response.send_message("Only the staff member who started this can confirm.", ephemeral=True)
+        if self.finished:
+            return await interaction.response.send_message("This action is already finished.", ephemeral=True)
+        if self.card["id"] in active_trade_card_ids:
+            return await interaction.response.send_message(
+                "This card is currently part of an active trade and cannot be removed yet.",
+                ephemeral=True
+            )
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE cards SET is_active = FALSE WHERE id=$1",
+                self.card["id"]
+            )
+        self.finished = True
+        for child in self.children:
+            child.disabled = True
+        await log_removed_card(interaction, self.card)
+        await interaction.response.edit_message(
+            content=(
+                f"**{self.card['name']}** `ID: {self.card['id']}` has been removed from future drops and card lists.\n"
+                f"Members who already own it will keep it in their inventories."
+            ),
+            embed=None,
+            view=self
+        )
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.grey)
+    async def cancel_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester.id:
+            return await interaction.response.send_message("Only the staff member who started this can cancel.", ephemeral=True)
+        self.finished = True
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content="Card removal cancelled.",
+            embed=None,
+            view=self
+        )
 
 # ---------------- GOOS REQUEST STAFF VIEW ----------------
 
@@ -504,6 +1368,7 @@ class GoosRequestView(discord.ui.View):
             embed=self.build_embed(),
             view=self
         )
+
 
 # ---------------- SHOP UI ----------------
 class GoosExchangeSelect(discord.ui.Select):
@@ -633,47 +1498,6 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
     if not auto_drop.is_running():
         auto_drop.start()
-
-
-# ---------------- AUTOCOMPLETE ----------------
-
-async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
-    cards = await get_user_active_cards(interaction.user.id)
-
-    return [
-        app_commands.Choice(name=card_label(card), value=str(card["id"]))
-        for card in cards
-        if current.lower() in card_label(card).lower()
-    ][:25]
-
-
-async def sell_cards_autocomplete(interaction: discord.Interaction, current: str):
-    cards = await get_user_owned_cards_for_sell(interaction.user.id)
-
-    return [
-        app_commands.Choice(name=card_label(card), value=str(card["id"]))
-        for card in cards
-        if current.lower() in card_label(card).lower()
-    ][:25]
-
-
-async def all_active_cards_autocomplete(interaction: discord.Interaction, current: str):
-    cards = await get_active_cards()
-
-    return [
-        app_commands.Choice(name=card_label(card), value=str(card["id"]))
-        for card in cards
-        if current.lower() in card_label(card).lower()
-    ][:25]
-
-
-async def shop_autocomplete(interaction: discord.Interaction, current: str):
-    return [
-        app_commands.Choice(name=item["name"], value=key)
-        for key, item in SHOP_ITEMS.items()
-        if key != "goosexchange" and (current.lower() in item["name"].lower() or current.lower() in key.lower())
-    ][:25]
-
 
 # ---------------- COMMANDS ----------------
 @bot.tree.command(name="ping", description="Check if the bot is online.")
