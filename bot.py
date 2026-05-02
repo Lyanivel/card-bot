@@ -386,8 +386,10 @@ async def is_staff_member(interaction: discord.Interaction):
 def create_goos_log_embed_from_values(buyer_id, request_id, goos_amount, sancs_cost, claimed_by=None, completed_by=None):
     description = (
         f"**User:** <@{buyer_id}>\n"
+        
         f"**Requested:** {goos_amount} Goos\n"
-        f"**Cost:** {format_coins(sancs_cost)}"
+        f"**Cost:** {format_coins(sancs_cost)}\n"
+        
     )
 
     if claimed_by:
@@ -428,7 +430,8 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
         buyer_id=interaction.user.id,
         request_id=request_id,
         goos_amount=shop_item["goos_amount"],
-        sancs_cost=shop_item["price"]
+        sancs_cost=shop_item["price"],
+        status="Paid"
     )
 
     staff_ping = await get_staff_ping(interaction)
@@ -1332,6 +1335,7 @@ class GoosRequestView(discord.ui.View):
             request_id=self.request_id,
             goos_amount=self.goos_amount,
             sancs_cost=self.sancs_cost,
+            status=status,
             claimed_by=self.claimed_by,
             completed_by=self.completed_by
         )
@@ -1373,7 +1377,6 @@ class GoosRequestView(discord.ui.View):
             embed=self.build_embed(),
             view=self
         )
-
 
 # ---------------- SHOP UI ----------------
 class GoosExchangeSelect(discord.ui.Select):
