@@ -383,15 +383,13 @@ async def is_staff_member(interaction: discord.Interaction):
     return is_staff(interaction.user)
 
 
-def create_goos_log_embed(interaction: discord.Interaction, request_id, shop_item, status="Paid", claimed_by=None, completed_by=None):
-    status_text = status
-
+def create_goos_log_embed_from_values(buyer_id, request_id, goos_amount, sancs_cost, status="Paid", claimed_by=None, completed_by=None):
     description = (
-        f"**User:** {interaction.user.mention}\n"
+        f"**User:** <@{buyer_id}>\n"
         f"**Request ID:** #{request_id}\n"
-        f"**Requested:** {shop_item['goos_amount']} Goos\n"
-        f"**Cost:** {format_coins(shop_item['price'])}\n"
-        f"**Status:** {status_text}"
+        f"**Requested:** {goos_amount} Goos\n"
+        f"**Cost:** {format_coins(sancs_cost)}\n"
+        f"**Status:** {status}"
     )
 
     if claimed_by:
@@ -401,7 +399,7 @@ def create_goos_log_embed(interaction: discord.Interaction, request_id, shop_ite
         description += f"\n**Completed by:** <@{completed_by}>"
 
     embed = discord.Embed(
-        title="New Goos Exchange Request",
+        title="Goos Exchange Request",
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
@@ -412,27 +410,47 @@ def create_goos_log_embed(interaction: discord.Interaction, request_id, shop_ite
 
 async def send_goos_log(interaction: discord.Interaction, request_id, shop_item):
     if not interaction.guild:
-        return
+        return False
 
     channel_id = await get_goos_log_channel(interaction.guild.id)
 
     if not channel_id:
-        return
+        return False
 
     channel = interaction.guild.get_channel(channel_id)
 
-    if not channel:
-        return
+    if channel is None:
+        channel = bot.get_channel(channel_id)
+
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception:
+            return False
 
     staff_ping = await get_staff_ping(interaction)
-    embed = create_goos_log_embed(interaction, request_id, shop_item)
+
+    embed = create_goos_log_embed_from_values(
+        buyer_id=interaction.user.id,
+        request_id=request_id,
+        goos_amount=shop_item["goos_amount"],
+        sancs_cost=shop_item["price"],
+        status="Paid"
+    )
 
     await channel.send(
         content=staff_ping,
         embed=embed,
-        view=GoosRequestView(request_id, interaction.user.id, shop_item["goos_amount"], shop_item["price"]),
-        allowed_mentions=discord.AllowedMentions(roles=True)
+        view=GoosRequestView(
+            request_id=request_id,
+            buyer_id=interaction.user.id,
+            goos_amount=shop_item["goos_amount"],
+            sancs_cost=shop_item["price"]
+        ),
+        allowed_mentions=discord.AllowedMentions(roles=True, users=True)
     )
+
+    return True
 
 def get_color(rarity):
     return {
@@ -1308,30 +1326,19 @@ class GoosRequestView(discord.ui.View):
         self.buyer_id = buyer_id
         self.goos_amount = goos_amount
         self.sancs_cost = sancs_cost
+        self.claimed_by = None
+        self.completed_by = None
 
-    async def build_updated_embed(self, interaction, status, claimed_by=None, completed_by=None):
-        description = (
-            f"**User:** <@{self.buyer_id}>\n"
-            f"**Request ID:** #{self.request_id}\n"
-            f"**Requested:** {self.goos_amount} Goos\n"
-            f"**Cost:** {format_coins(self.sancs_cost)}\n"
-            f"**Status:** {status}"
+    def build_embed(self, status):
+        return create_goos_log_embed_from_values(
+            buyer_id=self.buyer_id,
+            request_id=self.request_id,
+            goos_amount=self.goos_amount,
+            sancs_cost=self.sancs_cost,
+            status=status,
+            claimed_by=self.claimed_by,
+            completed_by=self.completed_by
         )
-
-        if claimed_by:
-            description += f"\n**Claimed by:** <@{claimed_by}>"
-
-        if completed_by:
-            description += f"\n**Completed by:** <@{completed_by}>"
-
-        embed = discord.Embed(
-            title="Goos Exchange Request",
-            description=description,
-            color=discord.Color.from_str("#9e659d")
-        )
-        embed.set_footer(text="This request was created automatically after the user paid.")
-
-        return embed
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary)
     async def claim_request(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1343,14 +1350,13 @@ class GoosRequestView(discord.ui.View):
         if not success:
             return await interaction.response.send_message(message, ephemeral=True)
 
+        self.claimed_by = interaction.user.id
         button.disabled = True
-        embed = await self.build_updated_embed(
-            interaction,
-            "Claimed",
-            claimed_by=interaction.user.id
-        )
 
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.response.edit_message(
+            embed=self.build_embed("Claimed"),
+            view=self
+        )
 
     @discord.ui.button(label="Complete", style=discord.ButtonStyle.success)
     async def complete_request(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1362,16 +1368,15 @@ class GoosRequestView(discord.ui.View):
         if not success:
             return await interaction.response.send_message(message, ephemeral=True)
 
+        self.completed_by = interaction.user.id
+
         for child in self.children:
             child.disabled = True
 
-        embed = await self.build_updated_embed(
-            interaction,
-            "Completed",
-            completed_by=interaction.user.id
+        await interaction.response.edit_message(
+            embed=self.build_embed("Completed"),
+            view=self
         )
-
-        await interaction.response.edit_message(embed=embed, view=self)
 
 
 # ---------------- SHOP UI ----------------
@@ -1422,7 +1427,13 @@ class GoosExchangeSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        await send_goos_log(interaction, request_id, shop_item)
+        log_sent = await send_goos_log(interaction, request_id, shop_item)
+
+        if not log_sent:
+            await interaction.followup.send(
+                "Heads up: no Goos log channel is set or I could not send to it. Please ask an admin to run `/setgooslogchannel`.",
+                ephemeral=True
+            )
 
 class ExchangeItemView(discord.ui.View):
     def __init__(self):
@@ -1751,7 +1762,13 @@ async def buy(interaction: discord.Interaction, item: str):
             ephemeral=True
         )
 
-        await send_goos_log(interaction, request_id, shop_item)
+        log_sent = await send_goos_log(interaction, request_id, shop_item)
+
+        if not log_sent:
+            await interaction.followup.send(
+                "Heads up: no Goos log channel is set or I could not send to it. Please ask an admin to run `/setgooslogchannel`.",
+                ephemeral=True
+            )
         return
     await interaction.response.send_message(
         f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
@@ -2057,6 +2074,46 @@ async def removecard(interaction: discord.Interaction, card_name: str):
         ephemeral=True
     )
 
+@bot.tree.command(name="gooslogtest", description="Admin only: test the Goos log channel.")
+async def gooslogtest(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            "Only server administrators can test the Goos log channel.",
+            ephemeral=True
+        )
+
+    channel_id = await get_goos_log_channel(interaction.guild.id)
+
+    if not channel_id:
+        return await interaction.response.send_message(
+            "No Goos log channel is set. Run `/setgooslogchannel #channel` first.",
+            ephemeral=True
+        )
+
+    channel = interaction.guild.get_channel(channel_id)
+
+    if channel is None:
+        channel = bot.get_channel(channel_id)
+
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception:
+            return await interaction.response.send_message(
+                "I could not access that Goos log channel. Make sure I can view and send messages there.",
+                ephemeral=True
+            )
+
+    await channel.send(
+        f"{BULLET_EMOJI} Goos log test successful. This channel is connected."
+    )
+
+    await interaction.response.send_message(
+        f"Goos log test sent to {channel.mention}.",
+        ephemeral=True
+    )
+
+
 @bot.tree.command(name="setgooslogchannel", description="Admin only: set the staff log channel for Goos exchange requests.")
 @app_commands.describe(channel="Channel where Goos exchange requests should be logged")
 async def setgooslogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -2068,8 +2125,17 @@ async def setgooslogchannel(interaction: discord.Interaction, channel: discord.T
 
     await set_goos_log_channel_db(interaction.guild.id, channel.id)
 
+    try:
+        await channel.send(f"{BULLET_EMOJI} Goos exchange log channel connected.")
+    except Exception:
+        return await interaction.response.send_message(
+            "I saved that channel, but I could not send a test message there. Please check my channel permissions.",
+            ephemeral=True
+        )
+
     await interaction.response.send_message(
-        f"Goos exchange log channel set to {channel.mention}."
+        f"Goos exchange log channel set to {channel.mention}.",
+        ephemeral=True
     )
 
 
