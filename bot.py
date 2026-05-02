@@ -414,6 +414,10 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
         return False
 
     channel = interaction.guild.get_channel(channel_id)
+
+    if channel is None:
+        channel = bot.get_channel(channel_id)
+
     if channel is None:
         try:
             channel = await bot.fetch_channel(channel_id)
@@ -429,20 +433,21 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
 
     staff_ping = await get_staff_ping(interaction)
 
-    await channel.send(
-        content=staff_ping,
-        embed=embed,
-        view=GoosRequestView(
-            request_id=request_id,
-            buyer_id=interaction.user.id,
-            goos_amount=shop_item["goos_amount"],
-            sancs_cost=shop_item["price"]
-        ),
-        allowed_mentions=discord.AllowedMentions(roles=True, users=True)
-    )
-
-    return True
-
+    try:
+        await channel.send(
+            content=staff_ping,
+            embed=embed,
+            view=GoosRequestView(
+                request_id=request_id,
+                buyer_id=interaction.user.id,
+                goos_amount=shop_item["goos_amount"],
+                sancs_cost=shop_item["price"]
+            ),
+            allowed_mentions=discord.AllowedMentions(roles=True, users=True)
+        )
+        return True
+    except Exception:
+        return False
 
 def get_color(rarity):
     return {
@@ -1418,7 +1423,7 @@ class GoosExchangeSelect(discord.ui.Select):
             ephemeral=True
         )
 
-        await send_goos_log(interaction, request_id, shop_item)
+        log_sent = await send_goos_log(interaction, request_id, shop_item)
 
         if not log_sent:
             await interaction.followup.send(
@@ -1753,7 +1758,7 @@ async def buy(interaction: discord.Interaction, item: str):
             ephemeral=True
         )
 
-        await send_goos_log(interaction, request_id, shop_item)
+        log_sent = await send_goos_log(interaction, request_id, shop_item)
 
         if not log_sent:
             await interaction.followup.send(
