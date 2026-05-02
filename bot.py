@@ -265,6 +265,26 @@ async def setup_database():
                 requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+
+        await conn.execute("""
+            ALTER TABLE goos_exchange_requests
+            ADD COLUMN IF NOT EXISTS claimed_by BIGINT;
+        """)
+
+        await conn.execute("""
+            ALTER TABLE goos_exchange_requests
+            ADD COLUMN IF NOT EXISTS completed_by BIGINT;
+        """)
+
+        await conn.execute("""
+            ALTER TABLE goos_exchange_requests
+            ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP;
+        """)
+
+        await conn.execute("""
+            ALTER TABLE goos_exchange_requests
+            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;
+        """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS server_settings (
                 guild_id BIGINT PRIMARY KEY,
@@ -363,6 +383,33 @@ async def is_staff_member(interaction: discord.Interaction):
     return is_staff(interaction.user)
 
 
+def create_goos_log_embed(interaction: discord.Interaction, request_id, shop_item, status="Paid", claimed_by=None, completed_by=None):
+    status_text = status
+
+    description = (
+        f"**User:** {interaction.user.mention}\n"
+        f"**Request ID:** #{request_id}\n"
+        f"**Requested:** {shop_item['goos_amount']} Goos\n"
+        f"**Cost:** {format_coins(shop_item['price'])}\n"
+        f"**Status:** {status_text}"
+    )
+
+    if claimed_by:
+        description += f"\n**Claimed by:** <@{claimed_by}>"
+
+    if completed_by:
+        description += f"\n**Completed by:** <@{completed_by}>"
+
+    embed = discord.Embed(
+        title="New Goos Exchange Request",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="This request was created automatically after the user paid.")
+
+    return embed
+
+
 async def send_goos_log(interaction: discord.Interaction, request_id, shop_item):
     if not interaction.guild:
         return
@@ -377,20 +424,15 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
     if not channel:
         return
 
-    embed = discord.Embed(
-        title="New Goos Exchange Request",
-        description=(
-            f"**User:** {interaction.user.mention}\n"
-            f"**Request ID:** #{request_id}\n"
-            f"**Requested:** {shop_item['goos_amount']} Goos\n"
-            f"**Cost:** {format_coins(shop_item['price'])}\n"
-            f"**Status:** Paid"
-        ),
-        color=discord.Color.from_str("#9e659d")
-    )
-    embed.set_footer(text="This request was created automatically after the user paid.")
+    staff_ping = await get_staff_ping(interaction)
+    embed = create_goos_log_embed(interaction, request_id, shop_item)
 
-    await channel.send(embed=embed)
+    await channel.send(
+        content=staff_ping,
+        embed=embed,
+        view=GoosRequestView(request_id, interaction.user.id, shop_item["goos_amount"], shop_item["price"]),
+        allowed_mentions=discord.AllowedMentions(roles=True)
+    )
 
 def get_color(rarity):
     return {
@@ -932,6 +974,54 @@ async def create_goos_request(user_id, goos_amount, cost):
             RETURNING id
         """, user_id, goos_amount, cost)
 
+
+
+async def claim_goos_request(request_id, staff_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status, claimed_by FROM goos_exchange_requests WHERE id=$1",
+            request_id
+        )
+
+        if not row:
+            return False, "That request was not found."
+
+        if row["status"] == "completed":
+            return False, "That request is already completed."
+
+        if row["claimed_by"]:
+            return False, "That request has already been claimed."
+
+        await conn.execute("""
+            UPDATE goos_exchange_requests
+            SET status='claimed', claimed_by=$1, claimed_at=CURRENT_TIMESTAMP
+            WHERE id=$2
+        """, staff_id, request_id)
+
+        return True, "Request claimed."
+
+
+async def complete_goos_request(request_id, staff_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT status FROM goos_exchange_requests WHERE id=$1",
+            request_id
+        )
+
+        if not row:
+            return False, "That request was not found."
+
+        if row["status"] == "completed":
+            return False, "That request is already completed."
+
+        await conn.execute("""
+            UPDATE goos_exchange_requests
+            SET status='completed', completed_by=$1, completed_at=CURRENT_TIMESTAMP
+            WHERE id=$2
+        """, staff_id, request_id)
+
+        return True, "Request completed."
+
 # ---------------- LOOT CRATE FUNCTIONS ----------------
 async def get_loot_crates(user_id):
     async with db_pool.acquire() as conn:
@@ -1208,6 +1298,81 @@ class RemoveCardView(discord.ui.View):
             embed=None,
             view=self
         )
+
+# ---------------- GOOS REQUEST STAFF VIEW ----------------
+
+class GoosRequestView(discord.ui.View):
+    def __init__(self, request_id, buyer_id, goos_amount, sancs_cost):
+        super().__init__(timeout=None)
+        self.request_id = request_id
+        self.buyer_id = buyer_id
+        self.goos_amount = goos_amount
+        self.sancs_cost = sancs_cost
+
+    async def build_updated_embed(self, interaction, status, claimed_by=None, completed_by=None):
+        description = (
+            f"**User:** <@{self.buyer_id}>\n"
+            f"**Request ID:** #{self.request_id}\n"
+            f"**Requested:** {self.goos_amount} Goos\n"
+            f"**Cost:** {format_coins(self.sancs_cost)}\n"
+            f"**Status:** {status}"
+        )
+
+        if claimed_by:
+            description += f"\n**Claimed by:** <@{claimed_by}>"
+
+        if completed_by:
+            description += f"\n**Completed by:** <@{completed_by}>"
+
+        embed = discord.Embed(
+            title="Goos Exchange Request",
+            description=description,
+            color=discord.Color.from_str("#9e659d")
+        )
+        embed.set_footer(text="This request was created automatically after the user paid.")
+
+        return embed
+
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary)
+    async def claim_request(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await is_staff_member(interaction):
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+
+        success, message = await claim_goos_request(self.request_id, interaction.user.id)
+
+        if not success:
+            return await interaction.response.send_message(message, ephemeral=True)
+
+        button.disabled = True
+        embed = await self.build_updated_embed(
+            interaction,
+            "Claimed",
+            claimed_by=interaction.user.id
+        )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Complete", style=discord.ButtonStyle.success)
+    async def complete_request(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await is_staff_member(interaction):
+            return await interaction.response.send_message("No permission.", ephemeral=True)
+
+        success, message = await complete_goos_request(self.request_id, interaction.user.id)
+
+        if not success:
+            return await interaction.response.send_message(message, ephemeral=True)
+
+        for child in self.children:
+            child.disabled = True
+
+        embed = await self.build_updated_embed(
+            interaction,
+            "Completed",
+            completed_by=interaction.user.id
+        )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+
 
 # ---------------- SHOP UI ----------------
 class GoosExchangeSelect(discord.ui.Select):
