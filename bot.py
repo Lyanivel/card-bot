@@ -64,10 +64,24 @@ TOP_1_EMOJI = "<:1stplace:1499791803086405703>"
 TOP_2_EMOJI = "<:2ndplace:1499791905884471406>"
 TOP_3_EMOJI = "<:3rdplace:1499792046435729578>"
 
+MAFIA_IMMUNITY_EMOJI = "<:mafiaimmunity:1499896444092416160>"
+DAILY_BOOST_EMOJI = "<:dailyboost:1499751908754198609>"
+WEEKLY_BOOST_EMOJI = "<:weeklyboost:1499751780366684180>"
+LUCK_BOOST_EMOJI = "<:luckboost:1499715335253786745>"
+WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
+
+DAILY_BOOST_PERCENT = 25
+WEEKLY_BOOST_PERCENT = 20
+
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
 LOOT_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628974966444052/CCEE5E4A-7174-4490-AAFC-11C0EBE59404.png?ex=69f57dd1&is=69f42c51&hm=de07d24e7036229395f24221f8ce35b03dbb9917ecadf019dd98464b9317b396"
-LEGENDARY_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628950811447426/80D3C92F-BF33-4F0A-998C-4D6D076D1678.png?ex=69f57dcb&is=69f42c4b&hm=12738cf641cbdc40b176407fa1c6800bb7487955ddcf731a58e37e92b843d26e"
+LEGENDARY_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628950811447426/80D3C92F-BF33-4F0A-998C-4D6D076D1678.png"
+MAFIA_IMMUNITY_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499896615417417728/61BD24E4-0CF4-4673-A48F-CDFCAC7F71ED.png"
+DAILY_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499878356836024330/11DB2281-7A7A-4C48-8165-1D62D4FDCBD1.png"
+WEEKLY_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499878854502650068/95EFFB37-547A-4BBE-A436-1A2ED3777FC0.png"
+LUCK_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499879293239558285/B7FDEBBC-39D3-4FD0-862D-2F7D53C3AFDF.png"
+WHEEL_SPIN_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499879748657221682/BECC68AE-295F-4D03-BCFA-AED03E1C3BB1.png"
 
 AVAILABLE_TITLES = {
     "Sanction Elite": 5000,
@@ -98,6 +112,36 @@ SHOP_ITEMS = {
         "description": "Higher rewards, better rarity odds, and a chance for 2 cards.",
         "category": "Crates",
         "crate_type": "legendary"
+    },
+    "mafiaimmunity": {
+        "name": "Mafia Immunity",
+        "price": 3500,
+        "description": "Grants immunity for your next Mafia game. Staff must confirm and track usage.",
+        "category": "Game Items",
+        "manual_item": True
+    },
+    "dailyboost": {
+        "name": "Daily Boost",
+        "price": 500,
+        "description": "Boosts your next daily claim by 25%. One use only.",
+        "category": "Boosts",
+        "boost_type": "daily",
+        "duration_seconds": 24 * 60 * 60
+    },
+    "weeklyboost": {
+        "name": "Weekly Boost",
+        "price": 1500,
+        "description": "Boosts your next weekly claim by 20%. One use only.",
+        "category": "Boosts",
+        "boost_type": "weekly",
+        "duration_seconds": 7 * 24 * 60 * 60
+    },
+    "wheelentry": {
+        "name": "Wheel Bonus Entry",
+        "price": 1000,
+        "description": "Grants one extra entry on a prize wheel you are already in. Staff must apply it manually.",
+        "category": "Game Items",
+        "manual_item": True
     },
     "luckboost": {
         "name": "Luck Boost",
@@ -365,19 +409,37 @@ def get_shop_item_emoji(item):
         return LOOT_CRATE_EMOJI
     if item.get("crate_type") == "legendary":
         return LEGENDARY_CRATE_EMOJI
+    if item.get("boost_type") == "luck":
+        return LUCK_BOOST_EMOJI
+    if item.get("boost_type") == "daily":
+        return DAILY_BOOST_EMOJI
+    if item.get("boost_type") == "weekly":
+        return WEEKLY_BOOST_EMOJI
+    if item.get("name") == "Mafia Immunity":
+        return MAFIA_IMMUNITY_EMOJI
+    if item.get("name") == "Wheel Bonus Entry":
+        return WHEEL_SPIN_EMOJI
     return ""
-
 
 def get_shop_item_image(item_key):
     if item_key == "lootcrate":
         return LOOT_CRATE_IMAGE_URL
     if item_key == "legendarycrate":
         return LEGENDARY_CRATE_IMAGE_URL
+    if item_key == "mafiaimmunity":
+        return MAFIA_IMMUNITY_IMAGE_URL
+    if item_key == "dailyboost":
+        return DAILY_BOOST_IMAGE_URL
+    if item_key == "weeklyboost":
+        return WEEKLY_BOOST_IMAGE_URL
+    if item_key == "luckboost":
+        return LUCK_BOOST_IMAGE_URL
+    if item_key == "wheelentry":
+        return WHEEL_SPIN_IMAGE_URL
     return ""
 
-
 def create_shop_embed():
-    categories = ["Crates", "Boosts", "Cosmetics", "Exchange"]
+    categories = ["Crates", "Boosts", "Game Items", "Cosmetics", "Exchange"]
     text = ""
 
     for category in categories:
@@ -445,6 +507,25 @@ def create_shop_item_embed(item_key):
             "**Exchange:**\n"
             f"{BULLET_EMOJI} Requests {item['goos_amount']} Goos\n"
             f"{BULLET_EMOJI} Staff must fulfill this manually\n"
+        )
+
+    elif item.get("boost_type") == "daily":
+        details += (
+            "**Effect:**\n"
+            f"{BULLET_EMOJI} Adds {DAILY_BOOST_PERCENT}% to your next daily claim\n"
+            f"{BULLET_EMOJI} Used automatically the next time you claim /daily\n"
+        )
+    elif item.get("boost_type") == "weekly":
+        details += (
+            "**Effect:**\n"
+            f"{BULLET_EMOJI} Adds {WEEKLY_BOOST_PERCENT}% to your next weekly claim\n"
+            f"{BULLET_EMOJI} Used automatically the next time you claim /weekly\n"
+        )
+    elif item.get("manual_item"):
+        details += (
+            "**How it works:**\n"
+            f"{BULLET_EMOJI} This purchase is logged for staff\n"
+            f"{BULLET_EMOJI} Staff will manually apply or confirm this reward\n"
         )
 
     details += f"Use `/buy` and choose `{item['name']}` to purchase."
@@ -862,6 +943,15 @@ async def set_boost(user_id, boost_type, duration_seconds):
         """, user_id, boost_type, expires_at)
 
     return expires_at
+
+
+async def clear_boost(user_id, boost_type):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM user_boosts WHERE user_id=$1 AND boost_type=$2",
+            user_id,
+            boost_type
+        )
 
 
 async def get_title(user_id):
@@ -1370,7 +1460,12 @@ async def daily(interaction: discord.Interaction):
 
     found_crate = random.randint(1, 100) <= DAILY_LOOT_CRATE_CHANCE
 
-    total = amount + bonus
+    boost_bonus = 0
+    if await get_active_boost(user_id, "daily"):
+        boost_bonus = int(amount * DAILY_BOOST_PERCENT / 100)
+        await clear_boost(user_id, "daily")
+
+    total = amount + bonus + boost_bonus
     await add_balance(user_id, total)
 
     if found_crate:
@@ -1378,7 +1473,7 @@ async def daily(interaction: discord.Interaction):
 
     message = (
         f"{CURRENCY_EMOJI} | Take your Sancs and go! "
-        f"**{amount} {CURRENCY_EMOJI}**"
+        f"**{total} {CURRENCY_EMOJI}**"
     )
 
     if streak >= 3:
@@ -1386,6 +1481,9 @@ async def daily(interaction: discord.Interaction):
 
     if bonus > 0:
         message += f"\nMilestone bonus: **{format_coins(bonus)}**"
+
+    if boost_bonus > 0:
+        message += f"\n{DAILY_BOOST_EMOJI} Daily Boost bonus: **{format_coins(boost_bonus)}**"
 
     if found_crate:
         message += f"\n{GIFT_BOX_EMOJI} You found a Loot Crate! Use `/opencrate`"
@@ -1410,14 +1508,26 @@ async def weekly(interaction: discord.Interaction):
         )
 
     amount = random.randint(WEEKLY_MIN, WEEKLY_MAX)
-    await add_balance(user_id, amount)
+    boost_bonus = 0
+
+    if await get_active_boost(user_id, "weekly"):
+        boost_bonus = int(amount * WEEKLY_BOOST_PERCENT / 100)
+        await clear_boost(user_id, "weekly")
+
+    total = amount + boost_bonus
+    await add_balance(user_id, total)
     await add_loot_crate(user_id, "regular", 1)
     await set_cooldown(user_id, "weekly")
 
-    await interaction.response.send_message(
+    message = (
         f"{WEEKLY_BOX_EMOJI} | Your Weekly Box is unsealing!\n"
-        f"You received **{format_coins(amount)}** and **1 {LOOT_CRATE_EMOJI} Loot Crate**."
+        f"You received **{format_coins(total)}** and **1 {LOOT_CRATE_EMOJI} Loot Crate**."
     )
+
+    if boost_bonus > 0:
+        message += f"\n{WEEKLY_BOOST_EMOJI} Weekly Boost bonus: **{format_coins(boost_bonus)}**"
+
+    await interaction.response.send_message(message)
 
 
 @bot.tree.command(name="givecurrency", description="Give some of your currency to another user.")
@@ -1576,15 +1686,25 @@ async def buy(interaction: discord.Interaction, item: str):
             f"{interaction.user.mention} bought **1 {emoji} {shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
         )
 
-    if shop_item.get("boost_type") == "luck":
+    if shop_item.get("boost_type"):
+        boost_type = shop_item["boost_type"]
         expires_at = await set_boost(
             interaction.user.id,
-            "luck",
+            boost_type,
             shop_item.get("duration_seconds", 3600)
         )
 
+        if boost_type == "luck":
+            boost_message = "Luck Boost activated for **1 hour**! Crate odds are improved"
+        elif boost_type == "daily":
+            boost_message = "Daily Boost activated! It will apply to your next /daily claim"
+        elif boost_type == "weekly":
+            boost_message = "Weekly Boost activated! It will apply to your next /weekly claim"
+        else:
+            boost_message = f"{shop_item['name']} activated"
+
         return await interaction.response.send_message(
-            f"Luck Boost activated for **1 hour**! Crate odds are improved until <t:{expires_at}:t>."
+            f"{boost_message} until <t:{expires_at}:t>."
         )
 
     if "title_text" in shop_item:
@@ -1592,6 +1712,11 @@ async def buy(interaction: discord.Interaction, item: str):
 
         return await interaction.response.send_message(
             f"{interaction.user.mention} bought the title **{shop_item['title_text']}** for **{format_coins(shop_item['price'])}**!"
+        )
+
+    if shop_item.get("manual_item"):
+        return await interaction.response.send_message(
+            f"{interaction.user.mention} bought **{get_shop_item_emoji(shop_item)} {shop_item['name']}** for **{format_coins(shop_item['price'])}**! Staff will manually apply this reward."
         )
 
     if "goos_amount" in shop_item:
