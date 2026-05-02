@@ -398,8 +398,7 @@ def get_shop_item_image(item_key):
     if item_key == "title":
         return TITLE_IMAGE_URL
     if item_key == "goosexchange" or item_key.startswith("goos"):
-        return TITLE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499880391606145244/19EC808A-8F5C-4990-9C1A-49AB16C156A2.png"
-SANC4OOS_IMAGE_URL
+        return SANC4OOS_IMAGE_URL
     return ""
 
 def create_shop_embed():
