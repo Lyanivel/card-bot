@@ -383,13 +383,23 @@ async def is_staff_member(interaction: discord.Interaction):
     return is_staff(interaction.user)
 
 
-def create_goos_log_embed_from_values(buyer_id, request_id, goos_amount, sancs_cost, claimed_by=None, completed_by=None):
+async def get_staff_ping(interaction: discord.Interaction):
+    if not interaction.guild:
+        return ""
+
+    saved_staff_role_id = await get_staff_role(interaction.guild.id)
+
+    if saved_staff_role_id:
+        return f"<@&{saved_staff_role_id}>"
+
+    return f"<@&{STAFF_ROLE_ID}>"
+
+
+def create_goos_log_embed_from_values(buyer_id, goos_amount, sancs_cost, claimed_by=None, completed_by=None):
     description = (
         f"**User:** <@{buyer_id}>\n"
-        
         f"**Requested:** {goos_amount} Goos\n"
-        f"**Cost:** {format_coins(sancs_cost)}\n"
-        
+        f"**Cost:** {format_coins(sancs_cost)}"
     )
 
     if claimed_by:
@@ -407,12 +417,15 @@ def create_goos_log_embed_from_values(buyer_id, request_id, goos_amount, sancs_c
 
     return embed
 
+
 async def send_goos_log(interaction: discord.Interaction, request_id, shop_item):
     if not interaction.guild:
         return False
 
     channel_id = await get_goos_log_channel(interaction.guild.id)
+
     if not channel_id:
+        print("No Goos log channel is set for this server.")
         return False
 
     channel = interaction.guild.get_channel(channel_id)
@@ -423,18 +436,17 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
     if channel is None:
         try:
             channel = await bot.fetch_channel(channel_id)
-        except Exception:
+        except Exception as e:
+            print(f"Could not fetch Goos log channel {channel_id}: {e}")
             return False
+
+    staff_ping = await get_staff_ping(interaction)
 
     embed = create_goos_log_embed_from_values(
         buyer_id=interaction.user.id,
-        request_id=request_id,
         goos_amount=shop_item["goos_amount"],
-        sancs_cost=shop_item["price"],
-        status="Paid"
+        sancs_cost=shop_item["price"]
     )
-
-    staff_ping = await get_staff_ping(interaction)
 
     try:
         await channel.send(
@@ -449,7 +461,8 @@ async def send_goos_log(interaction: discord.Interaction, request_id, shop_item)
             allowed_mentions=discord.AllowedMentions(roles=True, users=True)
         )
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Could not send Goos log message to channel {channel_id}: {e}")
         return False
 
 def get_color(rarity):
@@ -1332,10 +1345,8 @@ class GoosRequestView(discord.ui.View):
     def build_embed(self):
         return create_goos_log_embed_from_values(
             buyer_id=self.buyer_id,
-            request_id=self.request_id,
             goos_amount=self.goos_amount,
             sancs_cost=self.sancs_cost,
-            status=status,
             claimed_by=self.claimed_by,
             completed_by=self.completed_by
         )
@@ -1378,6 +1389,7 @@ class GoosRequestView(discord.ui.View):
             view=self
         )
 
+
 # ---------------- SHOP UI ----------------
 class GoosExchangeSelect(discord.ui.Select):
     def __init__(self):
@@ -1419,7 +1431,6 @@ class GoosExchangeSelect(discord.ui.Select):
 
         await interaction.response.send_message(
             f"{SANC4OOS_EMOJI} Goos exchange request created!\n"
-            f"Request ID: **#{request_id}**\n"
             f"Requested: **{shop_item['goos_amount']} Goos**\n"
             f"Cost: **{format_coins(shop_item['price'])}**\n"
             f"A staff member will need to fulfill this manually. Please open a ticket and include your request ID.",
@@ -1754,7 +1765,6 @@ async def buy(interaction: discord.Interaction, item: str):
         )
         await interaction.response.send_message(
             f"{SANC4OOS_EMOJI} Goos exchange request created!\n"
-            f"Request ID: **#{request_id}**\n"
             f"Requested: **{shop_item['goos_amount']} Goos**\n"
             f"Cost: **{format_coins(shop_item['price'])}**\n"
             f"A staff member will need to fulfill this manually. Please open a ticket and include your request ID.",
