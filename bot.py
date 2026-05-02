@@ -54,7 +54,7 @@ WEEKLY_BOOST_EMOJI = "<:weeklyboost:1499751780366684180>"
 LUCK_BOOST_EMOJI = "<:luckboost:1499715335253786745>"
 WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
 TITLE_EMOJI = "<:title:1499751841481752686>"
-SANC4OOS_EMOJI = "<<:sanc4oos:1499901107986497717>1499901107986497717>"
+SANC4OOS_EMOJI = "<<:sanc4oos:1499903033042276493>1499903033042276493>"
 DAILY_BOOST_PERCENT = 25
 WEEKLY_BOOST_PERCENT = 20
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
@@ -68,6 +68,8 @@ LUCK_BOOST_IMAGE_URL = "https://cdn.discordapp.com/attachments/14933419082468599
 WHEEL_SPIN_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499879748657221682/BECC68AE-295F-4D03-BCFA-AED03E1C3BB1.png"
 TITLE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499880391606145244/19EC808A-8F5C-4990-9C1A-49AB16C156A2.png"
 SANC4OOS_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499902115605123243/0CC3FA91-214E-4938-B2A0-49605AD35984.png"
+SHOP_ICON_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499880843756437625/Black_and_White_Geometri_Open_Here_Square_Sticker.png"
+INVENTORY_ICON_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499889754936840380/E46DF3DB-5008-48CE-B80B-645CBA562354.png"
 AVAILABLE_TITLES = {
     "Sanction Elite": 5000,
     "Loot Goblin": 5000,
@@ -428,6 +430,7 @@ def create_shop_embed():
         description=text or "The shop is currently empty.",
         color=discord.Color.from_str("#9e659d")
     )
+    embed.set_thumbnail(url=SHOP_ICON_URL)
     embed.set_footer(text="Choose an item below to view details.")
 
     return embed
@@ -1205,7 +1208,8 @@ class GoosExchangeSelect(discord.ui.Select):
             f"{staff_ping} {interaction.user.mention} created a Goos exchange request.\n"
             f"{BULLET_EMOJI} Request ID: **#{request_id}**\n"
             f"{BULLET_EMOJI} Requested: **{shop_item['goos_amount']} Goos**\n"
-            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**"
+            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**",
+            allowed_mentions=discord.AllowedMentions(roles=True, users=True)
         )
 
 
@@ -1541,7 +1545,8 @@ async def buy(interaction: discord.Interaction, item: str):
             f"{staff_ping} {interaction.user.mention} created a Goos exchange request.\n"
             f"{BULLET_EMOJI} Request ID: **#{request_id}**\n"
             f"{BULLET_EMOJI} Requested: **{shop_item['goos_amount']} Goos**\n"
-            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**"
+            f"{BULLET_EMOJI} Cost: **{format_coins(shop_item['price'])}**",
+            allowed_mentions=discord.AllowedMentions(roles=True, users=True)
         )
         return
     await interaction.response.send_message(
@@ -1670,6 +1675,8 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         description=text,
         color=discord.Color.from_str("#9e659d")
     )
+    embed.set_thumbnail(url=INVENTORY_ICON_URL)
+
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="trade", description="Trade cards with another user.")
