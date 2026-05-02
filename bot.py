@@ -1110,20 +1110,33 @@ class RemoveCardView(discord.ui.View):
 class ShopSelect(discord.ui.Select):
     def __init__(self):
         options = []
+
         for key, item in SHOP_ITEMS.items():
+            emoji_code = get_shop_item_emoji(item)
+            option_emoji = None
+
+            if emoji_code:
+                try:
+                    option_emoji = discord.PartialEmoji.from_str(emoji_code)
+                except Exception:
+                    option_emoji = None
+
             options.append(
                 discord.SelectOption(
                     label=item["name"],
                     value=key,
-                    description=item["description"][:100]
+                    description=item["description"][:100],
+                    emoji=option_emoji
                 )
             )
+
         super().__init__(
             placeholder="Select an item to view details...",
             min_values=1,
             max_values=1,
             options=options[:25]
         )
+
     async def callback(self, interaction: discord.Interaction):
         item_key = self.values[0]
         embed = create_shop_item_embed(item_key)
