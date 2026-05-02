@@ -634,6 +634,47 @@ async def on_ready():
     if not auto_drop.is_running():
         auto_drop.start()
 
+
+# ---------------- AUTOCOMPLETE ----------------
+
+async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_user_active_cards(interaction.user.id)
+
+    return [
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        for card in cards
+        if current.lower() in card_label(card).lower()
+    ][:25]
+
+
+async def sell_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_user_owned_cards_for_sell(interaction.user.id)
+
+    return [
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        for card in cards
+        if current.lower() in card_label(card).lower()
+    ][:25]
+
+
+async def all_active_cards_autocomplete(interaction: discord.Interaction, current: str):
+    cards = await get_active_cards()
+
+    return [
+        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        for card in cards
+        if current.lower() in card_label(card).lower()
+    ][:25]
+
+
+async def shop_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=item["name"], value=key)
+        for key, item in SHOP_ITEMS.items()
+        if key != "goosexchange" and (current.lower() in item["name"].lower() or current.lower() in key.lower())
+    ][:25]
+
+
 # ---------------- COMMANDS ----------------
 @bot.tree.command(name="ping", description="Check if the bot is online.")
 async def ping(interaction: discord.Interaction):
