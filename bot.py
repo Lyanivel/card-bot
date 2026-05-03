@@ -1901,10 +1901,7 @@ async def weekly(interaction: discord.Interaction):
     rewards_text = "\n".join(reward_lines)
 
     await interaction.edit_original_response(
-        content=(
-            f"{WEEKLY_OPENED_EMOJI} | Your Weekly Box opened!\n"
-            f"{rewards_text}"
-        )
+        content=rewards_text
     )
 
 
