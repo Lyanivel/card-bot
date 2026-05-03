@@ -1,6 +1,7 @@
 import os
 import random
 import time
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -32,6 +33,9 @@ DAILY_STREAK_BONUS_AMOUNT = 500
 DAILY_LOOT_CRATE_CHANCE = 2  # 2% chance
 WEEKLY_MIN = 500
 WEEKLY_MAX = 900
+WEEKLY_DAILY_BOOST_CHANCE = 15
+WEEKLY_LUCK_BOOST_CHANCE = 10
+WEEKLY_WEEKLY_BOOST_CHANCE = 5
 CLAIM_LOOT_CRATE_CHANCE = 5  # 5% chance
 REGULAR_CRATE_MIN = 100
 REGULAR_CRATE_MAX = 500
@@ -40,7 +44,8 @@ LEGENDARY_CRATE_MAX = 1500
 LEGENDARY_SECOND_CARD_CHANCE = 20  # 20% chance
 CURRENCY_EMOJI = "<:sancs:1499174670568788018>"
 STREAK_EMOJI = "<:sancstreak:1499522539209359440>"
-WEEKLY_BOX_EMOJI = "<:weeklybox:1499468656290168964>"
+WEEKLY_BOX_EMOJI = "<:weeklybox:1500637762074837012>"
+WEEKLY_OPENED_EMOJI = "<:weeklyopened:1500637809084731443>"
 GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
 LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
 LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
@@ -1837,30 +1842,71 @@ async def weekly(interaction: discord.Interaction):
     user_id = interaction.user.id
     now = int(time.time())
     last_used = await get_cooldown(user_id, "weekly")
+
     if last_used and now - last_used < WEEKLY_COOLDOWN:
         remaining = WEEKLY_COOLDOWN - (now - last_used)
         days = remaining // 86400
         hours = (remaining % 86400) // 3600
+
         return await interaction.response.send_message(
             f"You already claimed your weekly. Try again in {days}d {hours}h.",
             ephemeral=True
         )
+
+    await interaction.response.send_message(
+        f"{WEEKLY_BOX_EMOJI} | Your Weekly Box is unsealing!"
+    )
+
+    await asyncio.sleep(2)
+
     amount = random.randint(WEEKLY_MIN, WEEKLY_MAX)
     boost_bonus = 0
+
     if await get_active_boost(user_id, "weekly"):
         boost_bonus = int(amount * WEEKLY_BOOST_PERCENT / 100)
         await clear_boost(user_id, "weekly")
+
     total = amount + boost_bonus
+
     await add_balance(user_id, total)
     await add_loot_crate(user_id, "regular", 1)
     await set_cooldown(user_id, "weekly")
-    message = (
-        f"{WEEKLY_BOX_EMOJI} | Your Weekly Box is unsealing!\n"
-        f"You received **{format_coins(total)}** and **1 {LOOT_CRATE_EMOJI} Loot Crate**."
-    )
+
+    reward_lines = [
+        f"{BULLET_EMOJI} **Sancs:** {format_coins(total)}",
+        f"{BULLET_EMOJI} **Loot Crate:** 1 {LOOT_CRATE_EMOJI}",
+    ]
+
     if boost_bonus > 0:
-        message += f"\n{WEEKLY_BOOST_EMOJI} Weekly Boost bonus: **{format_coins(boost_bonus)}**"
-    await interaction.response.send_message(message)
+        reward_lines.append(
+            f"{BULLET_EMOJI} {WEEKLY_BOOST_EMOJI} **Weekly Boost bonus:** {format_coins(boost_bonus)}"
+        )
+
+    found_daily_boost = random.randint(1, 100) <= WEEKLY_DAILY_BOOST_CHANCE
+    found_luck_boost = random.randint(1, 100) <= WEEKLY_LUCK_BOOST_CHANCE
+    found_weekly_boost = random.randint(1, 100) <= WEEKLY_WEEKLY_BOOST_CHANCE
+
+    if found_daily_boost:
+        await set_boost(user_id, "daily", 24 * 60 * 60)
+        reward_lines.append(f"{BULLET_EMOJI} {DAILY_BOOST_EMOJI} **Daily Boost:** applies to your next /daily")
+
+    if found_luck_boost:
+        await set_boost(user_id, "luck", 60 * 60)
+        reward_lines.append(f"{BULLET_EMOJI} {LUCK_BOOST_EMOJI} **Luck Boost:** active for 1 hour")
+
+    if found_weekly_boost:
+        await set_boost(user_id, "weekly", 7 * 24 * 60 * 60)
+        reward_lines.append(f"{BULLET_EMOJI} {WEEKLY_BOOST_EMOJI} **Weekly Boost:** applies to your next /weekly")
+
+    rewards_text = "\n".join(reward_lines)
+
+    await interaction.edit_original_response(
+        content=(
+            f"{WEEKLY_OPENED_EMOJI} | Your Weekly Box opened!\n"
+            f"{rewards_text}"
+        )
+    )
+
 
 @bot.tree.command(name="givecurrency", description="Give some of your currency to another user.")
 @app_commands.describe(
