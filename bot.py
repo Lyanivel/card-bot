@@ -75,6 +75,26 @@ WEEKLY_BOOST_PERCENT = 20
 SNIPE_PRICE = 2500
 SNIPE_COOLDOWN = 10 * 60
 SNIPE_MUTE_MINUTES = 5
+OWNER_PROTECTION_MESSAGES = [
+    "{target} SHOULD have been muted. Discord chose peace instead of violence.",
+    "{target} was eliminated spiritually because Discord refused the paperwork.",
+    "Direct hit on {target}! Unfortunately, Discord said 'absolutely not.'",
+    "{target} got saved by corporate intervention. Booo!",
+]
+
+SNIPE_SUCCESS_MESSAGES = [
+    "{target} got caught lacking, pack it up immediately!",
+    "{target} never even saw it coming.",
+    "{target}? Folded instantly.",
+    "{target}, geesh you shouldâve hid better!",
+]
+
+SNIPE_MISS_MESSAGES = [
+    "{target} escaped safely. Haha you missed!",
+    "{target} escaped. That shot needs to be investigated.",
+    "{target} escaped while {sniper} hit absolutely nothing.",
+    "{target} escaped and immediately started talking trash.",
+]
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
 LOOT_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628974966444052/CCEE5E4A-7174-4490-AAFC-11C0EBE59404.png?ex=69f57dd1&is=69f42c51&hm=de07d24e7036229395f24221f8ce35b03dbb9917ecadf019dd98464b9317b396"
@@ -1757,14 +1777,18 @@ class SnipeGameView(discord.ui.View):
 
             if self.guessed_bush == self.hidden_bush:
                 timeout_until = discord.utils.utcnow() + timedelta(minutes=self.mute_minutes)
-                mute_text = f"{self.target.mention} was found and muted for {self.mute_minutes} minutes."
+                mute_text = random.choice(SNIPE_SUCCESS_MESSAGES).format(
+                    target=self.target.mention,
+                    sniper=self.sniper.mention
+                )
+                mute_text += f" Muted for {self.mute_minutes} minutes."
 
                 try:
                     await self.target.timeout(timeout_until, reason=f"Snipe hit by {self.sniper}")
                 except Exception:
-                    mute_text = (
-                        f"{self.target.mention} was found, but I could not mute them. "
-                        f"Check my Moderate Members permission and role position."
+                    mute_text = random.choice(OWNER_PROTECTION_MESSAGES).format(
+                        target=self.target.mention,
+                        sniper=self.sniper.mention
                     )
 
                 return await interaction.response.edit_message(
@@ -1775,10 +1799,15 @@ class SnipeGameView(discord.ui.View):
                     view=self
                 )
 
+            miss_text = random.choice(SNIPE_MISS_MESSAGES).format(
+                target=self.target.mention,
+                sniper=self.sniper.mention
+            )
+
             return await interaction.response.edit_message(
                 content=(
                     f"{SNIPE_MISS_EMOJI} **SHOT MISSED!**\n"
-                    f"{self.target.mention} escaped safely."
+                    f"{miss_text}"
                 ),
                 view=self
             )
@@ -2103,11 +2132,11 @@ async def create_settings_embed(guild_id):
     mute_minutes = int(settings["snipe_mute_minutes"])
 
     description = (
-        f"1. {format_on_off(settings['staff_snipe_enabled'])} Staff sniping\n"
-        f"2. â±ï¸ Snipe cooldown: **{cooldown_minutes} minutes**\n"
-        f"3. ð Snipe mute time: **{mute_minutes} minutes**\n"
-        f"4. {SNIPE_EMOJI} Regular sniper bushes: **5**\n"
-        f"5. {LEGENDARY_SNIPER_EMOJI} Legendary sniper bushes: **3**"
+        f"{format_on_off(settings['staff_snipe_enabled'])} **Staff Sniping**\n"
+        f"{TOGGLE_ON_EMOJI} **Snipe Cooldown:** {cooldown_minutes} minutes\n"
+        f"{TOGGLE_ON_EMOJI} **Snipe Mute Time:** {mute_minutes} minutes\n"
+        f"{TOGGLE_ON_EMOJI} **Regular Sniper Bushes:** 5\n"
+        f"{TOGGLE_ON_EMOJI} **Legendary Sniper Bushes:** 3"
     )
 
     embed = discord.Embed(
@@ -2656,7 +2685,7 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
     if not staff_snipe_enabled and saved_staff_role_id:
         if any(role.id == saved_staff_role_id for role in target.roles):
             return await interaction.response.send_message(
-                "Staff sniping is currently disabled.",
+                "Staff sniping is currently disabled in settings.",
                 ephemeral=True
             )
 
