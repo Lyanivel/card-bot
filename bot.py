@@ -3113,4 +3113,9 @@ async def listdropchannels(interaction: discord.Interaction):
     embed = discord.Embed(
         title="Drop Channels",
         description="\n".join(mentions),
-        color=discord.Co
+        color=discord.Color.from_str("#9e659d")
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ---------------- RUN ----------------
+bot.run(TOKEN)
