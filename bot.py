@@ -61,6 +61,8 @@ WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
 TITLE_EMOJI = "<:title:1499751841481752686>"
 SANC4OOS_EMOJI = "<:sanc4oos:1499903033042276493>"
 CUSTOM_EMOJI_SHOP = "<:customemoji:1499912654528053329>"
+TOGGLE_ON_EMOJI = "<:toggleon:1501644856764797038>"
+TOGGLE_OFF_EMOJI = "<:toggleoff:1501644991188172954>"
 SNIPE_EMOJI = "<:snipe:1501413204939641025>"
 LEGENDARY_SNIPER_EMOJI = "<:legendarysnipe:1501572128544391249>"
 BUSH_1_EMOJI = "<:bush:1501411561758003313>"
@@ -2091,7 +2093,7 @@ class BackToShopView(discord.ui.View):
 # ---------------- STAFF SETTINGS UI ----------------
 
 def format_on_off(value: bool):
-    return "✅ On" if value else "❌ Off"
+    return TOGGLE_ON_EMOJI if value else TOGGLE_OFF_EMOJI
 
 
 async def create_settings_embed(guild_id):
@@ -2102,15 +2104,15 @@ async def create_settings_embed(guild_id):
 
     description = (
         f"1. {format_on_off(settings['staff_snipe_enabled'])} Staff sniping\n"
-        f"2. ⏱️ Snipe cooldown: **{cooldown_minutes} minutes**\n"
-        f"3. 🔇 Snipe mute time: **{mute_minutes} minutes**\n"
+        f"2. â±ï¸ Snipe cooldown: **{cooldown_minutes} minutes**\n"
+        f"3. ð Snipe mute time: **{mute_minutes} minutes**\n"
         f"4. {SNIPE_EMOJI} Regular sniper bushes: **5**\n"
         f"5. {LEGENDARY_SNIPER_EMOJI} Legendary sniper bushes: **3**"
     )
 
     embed = discord.Embed(
         title="Staff Settings",
-        description=f"**Game Configuration**\n\n{description}",
+        description=f"**Sanction Settings**\n\n{description}",
         color=discord.Color.from_str("#9e659d")
     )
 
@@ -3111,9 +3113,4 @@ async def listdropchannels(interaction: discord.Interaction):
     embed = discord.Embed(
         title="Drop Channels",
         description="\n".join(mentions),
-        color=discord.Color.from_str("#9e659d")
-    )
-    await interaction.response.send_message(embed=embed)
-
-# ---------------- RUN ----------------
-bot.run(TOKEN)
+        color=discord.Color.from_str("#9e6
