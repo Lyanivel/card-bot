@@ -62,9 +62,9 @@ TITLE_EMOJI = "<:title:1499751841481752686>"
 SANC4OOS_EMOJI = "<:sanc4oos:1499903033042276493>"
 CUSTOM_EMOJI_SHOP = "<:customemoji:1499912654528053329>"
 SNIPE_EMOJI = "<:snipe:1501413204939641025>"
-BUSH_1_EMOJI = "<:bush1:1501411561758003313>"
-BUSH_2_EMOJI = "<:bush2:1501411584134742217>"
-BUSH_3_EMOJI = "<:bush3:1501411618104545411>"
+BUSH_1_EMOJI = "<:bush:1501411561758003313>"
+BUSH_2_EMOJI = "<:bush:1501411561758003313>"
+BUSH_3_EMOJI = "<:bush:1501411561758003313>"
 SNIPE_HIT_EMOJI = "<:bang:1501411689776808067>"
 SNIPE_MISS_EMOJI = "<:safe:1501411804025327797>"
 DAILY_BOOST_PERCENT = 25
@@ -360,6 +360,13 @@ async def setup_database():
                 user_id BIGINT PRIMARY KEY,
                 regular_count INTEGER NOT NULL DEFAULT 0,
                 legendary_count INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS snipe_settings (
+                guild_id BIGINT PRIMARY KEY,
+                staff_snipe_enabled BOOLEAN NOT NULL DEFAULT TRUE
             );
         """)
 
@@ -1329,6 +1336,34 @@ async def remove_snipe_item(user_id, snipe_type="regular"):
             return True
 
 
+
+async def get_staff_snipe_enabled(guild_id):
+    async with db_pool.acquire() as conn:
+        value = await conn.fetchval(
+            "SELECT staff_snipe_enabled FROM snipe_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+        if value is None:
+            await conn.execute(
+                "INSERT INTO snipe_settings (guild_id, staff_snipe_enabled) VALUES ($1, TRUE) ON CONFLICT (guild_id) DO NOTHING",
+                guild_id
+            )
+            return True
+
+        return value
+
+
+async def set_staff_snipe_enabled(guild_id, enabled: bool):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO snipe_settings (guild_id, staff_snipe_enabled)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET staff_snipe_enabled = EXCLUDED.staff_snipe_enabled
+        """, guild_id, enabled)
+
+
 async def choose_random_card_with_weights(weights):
     rarity = random.choices(
         ["Common", "Rare", "Epic", "Legendary"],
@@ -1577,7 +1612,7 @@ class SnipeGameView(discord.ui.View):
         self.sniper = sniper
         self.target = target
         self.snipe_type = snipe_type
-        self.bush_count = 2 if snipe_type == "legendary" else 3
+        self.bush_count = 3 if snipe_type == "legendary" else 5
         self.phase = "hide"
         self.hidden_bush = None
         self.guessed_bush = None
@@ -2356,6 +2391,23 @@ async def buy(interaction: discord.Interaction, item: str):
     )
 
 
+
+@bot.tree.command(name="togglestaffsnipe", description="Enable or disable sniping staff members.")
+@app_commands.describe(enabled="Turn staff sniping on or off")
+@app_commands.checks.has_permissions(administrator=True)
+async def togglestaffsnipe(interaction: discord.Interaction, enabled: bool):
+    await set_staff_snipe_enabled(interaction.guild.id, enabled)
+
+    if enabled:
+        message = "Staff members can now be sniped."
+    else:
+        message = "Staff members can no longer be sniped."
+
+    await interaction.response.send_message(
+        f"{SNIPE_EMOJI} | {message}"
+    )
+
+
 @bot.tree.command(name="snipe", description="Use a Sniper to target another user.")
 @app_commands.describe(user="User to snipe")
 async def snipe(interaction: discord.Interaction, user: discord.Member):
@@ -2366,6 +2418,17 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
 
     if target.bot:
         return await interaction.response.send_message("You cannot snipe a bot.", ephemeral=True)
+
+    staff_snipe_enabled = await get_staff_snipe_enabled(interaction.guild.id)
+
+    saved_staff_role_id = await get_staff_role(interaction.guild.id)
+
+    if not staff_snipe_enabled and saved_staff_role_id:
+        if any(role.id == saved_staff_role_id for role in target.roles):
+            return await interaction.response.send_message(
+                "Staff sniping is currently disabled.",
+                ephemeral=True
+            )
 
     if target_id == sniper_id:
         return await interaction.response.send_message("You cannot snipe yourself.", ephemeral=True)
