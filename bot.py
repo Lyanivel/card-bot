@@ -1571,7 +1571,106 @@ def get_bush_emoji(bush_number):
     }.get(bush_number, BUSH_1_EMOJI)
 
 
-class SnipeBushButton(discord.ui.Button):
+class SnipeGameView(discord.ui.View):
+    def __init__(self, sniper, target, snipe_type="regular"):
+        super().__init__(timeout=120)
+        self.sniper = sniper
+        self.target = target
+        self.snipe_type = snipe_type
+        self.bush_count = 2 if snipe_type == "legendary" else 3
+        self.phase = "hide"
+        self.hidden_bush = None
+        self.guessed_bush = None
+        self.finished = False
+
+        for bush_number in range(1, self.bush_count + 1):
+            self.add_item(SnipeGameButton(bush_number))
+
+    async def on_timeout(self):
+        self.finished = True
+
+        for child in self.children:
+            child.disabled = True
+
+    async def handle_choice(self, interaction: discord.Interaction, bush_number: int):
+        if self.finished:
+            return await interaction.response.send_message("This snipe is already finished.", ephemeral=True)
+
+        if self.phase == "hide":
+            if interaction.user.id != self.target.id:
+                return await interaction.response.send_message(
+                    "Only the target can choose where to hide.",
+                    ephemeral=True
+                )
+
+            self.hidden_bush = bush_number
+            self.phase = "guess"
+
+            await interaction.response.edit_message(
+                content=(
+                    f"{SNIPE_EMOJI} | {self.target.mention} has hidden.\n"
+                    f"{self.sniper.mention}, take your shot."
+                ),
+                view=self
+            )
+            return
+
+        if self.phase == "guess":
+            if interaction.user.id != self.sniper.id:
+                return await interaction.response.send_message(
+                    "Only the sniper can take the shot.",
+                    ephemeral=True
+                )
+
+            self.guessed_bush = bush_number
+            self.finished = True
+
+            for child in self.children:
+                child.disabled = True
+
+            removed = await remove_snipe_item(self.sniper.id, self.snipe_type)
+
+            if not removed:
+                return await interaction.response.edit_message(
+                    content=(
+                        f"{SNIPE_MISS_EMOJI} | {self.sniper.mention} no longer has a Sniper. "
+                        f"The snipe was cancelled."
+                    ),
+                    view=self
+                )
+
+            await set_cooldown(self.sniper.id, "snipe")
+
+            if self.guessed_bush == self.hidden_bush:
+                timeout_until = discord.utils.utcnow() + timedelta(minutes=SNIPE_MUTE_MINUTES)
+                mute_text = f"{self.target.mention} was found and muted for {SNIPE_MUTE_MINUTES} minutes."
+
+                try:
+                    await self.target.timeout(timeout_until, reason=f"Snipe hit by {self.sniper}")
+                except Exception:
+                    mute_text = (
+                        f"{self.target.mention} was found, but I could not mute them. "
+                        f"Check my Moderate Members permission and role position."
+                    )
+
+                return await interaction.response.edit_message(
+                    content=(
+                        f"{SNIPE_HIT_EMOJI} **SHOT HIT!**\n"
+                        f"{mute_text}"
+                    ),
+                    view=self
+                )
+
+            return await interaction.response.edit_message(
+                content=(
+                    f"{SNIPE_MISS_EMOJI} **SHOT MISSED!**\n"
+                    f"{self.target.mention} escaped safely."
+                ),
+                view=self
+            )
+
+
+class SnipeGameButton(discord.ui.Button):
     def __init__(self, bush_number):
         super().__init__(
             label=f"Bush {bush_number}",
@@ -1581,40 +1680,7 @@ class SnipeBushButton(discord.ui.Button):
         self.bush_number = bush_number
 
     async def callback(self, interaction: discord.Interaction):
-        view = self.view
-
-        if interaction.user.id != view.allowed_user_id:
-            return await interaction.response.send_message("This is not your choice.", ephemeral=True)
-
-        if view.choice is not None:
-            return await interaction.response.send_message("A choice was already made.", ephemeral=True)
-
-        view.choice = self.bush_number
-
-        for child in view.children:
-            child.disabled = True
-
-        await interaction.response.edit_message(
-            content=f"{get_bush_emoji(self.bush_number)} Choice locked in.",
-            view=view
-        )
-
-        view.event.set()
-
-
-class SnipeChoiceView(discord.ui.View):
-    def __init__(self, allowed_user_id, bush_count=3):
-        super().__init__(timeout=60)
-        self.allowed_user_id = allowed_user_id
-        self.bush_count = bush_count
-        self.choice = None
-        self.event = asyncio.Event()
-
-        for bush_number in range(1, bush_count + 1):
-            self.add_item(SnipeBushButton(bush_number))
-
-    async def on_timeout(self):
-        self.event.set()
+        await self.view.handle_choice(interaction, self.bush_number)
 
 
 # ---------------- CUSTOM EMOJI REQUEST STAFF VIEW ----------------
@@ -2338,100 +2404,13 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
         )
 
     snipe_type = "legendary" if legendary_snipers > 0 else "regular"
-    bush_count = 2 if snipe_type == "legendary" else 3
+    view = SnipeGameView(sniper=sniper, target=target, snipe_type=snipe_type)
 
     await interaction.response.send_message(
-        f"{SNIPE_EMOJI} | {target.mention} is being targeted by {sniper.mention}..."
+        f"{SNIPE_EMOJI} | {target.mention} is being targeted by {sniper.mention}.\n"
+        f"{target.mention}, choose a bush to hide in.",
+        view=view
     )
-
-    public_message = await interaction.original_response()
-
-    hide_view = SnipeChoiceView(target_id, bush_count=bush_count)
-
-    try:
-        await target.send(
-            f"{SNIPE_EMOJI} | {sniper.mention} is targeting you.\n"
-            f"Choose a bush to hide in.",
-            view=hide_view
-        )
-    except Exception:
-        await public_message.edit(
-            content=f"{SNIPE_MISS_EMOJI} | I could not DM {target.mention}, so the snipe was cancelled."
-        )
-        return
-
-    try:
-        await asyncio.wait_for(hide_view.event.wait(), timeout=60)
-    except asyncio.TimeoutError:
-        pass
-
-    if hide_view.choice is None:
-        await public_message.edit(
-            content=f"{SNIPE_MISS_EMOJI} | {target.mention} did not hide in time. The snipe was cancelled."
-        )
-        return
-
-    guess_view = SnipeChoiceView(sniper_id, bush_count=bush_count)
-
-    try:
-        await sniper.send(
-            f"{SNIPE_EMOJI} | {target.display_name} has hidden.\n"
-            f"Choose the bush you want to shoot.",
-            view=guess_view
-        )
-    except Exception:
-        await public_message.edit(
-            content=f"{SNIPE_MISS_EMOJI} | I could not DM {sniper.mention}, so the snipe was cancelled."
-        )
-        return
-
-    await public_message.edit(
-        content=f"{SNIPE_EMOJI} | {target.mention} has hidden. {sniper.mention} is taking the shot..."
-    )
-
-    try:
-        await asyncio.wait_for(guess_view.event.wait(), timeout=60)
-    except asyncio.TimeoutError:
-        pass
-
-    if guess_view.choice is None:
-        await public_message.edit(
-            content=f"{SNIPE_MISS_EMOJI} | {sniper.mention} did not shoot in time. {target.mention} escaped."
-        )
-        return
-
-    removed = await remove_snipe_item(sniper_id, snipe_type)
-
-    if not removed:
-        await public_message.edit(
-            content=f"{SNIPE_MISS_EMOJI} | {sniper.mention} no longer has a Sniper. The snipe was cancelled."
-        )
-        return
-
-    await set_cooldown(sniper_id, "snipe")
-
-    if guess_view.choice == hide_view.choice:
-        timeout_until = discord.utils.utcnow() + timedelta(minutes=SNIPE_MUTE_MINUTES)
-        mute_text = f"{target.mention} was found and muted for {SNIPE_MUTE_MINUTES} minutes."
-
-        try:
-            await target.timeout(timeout_until, reason=f"Snipe hit by {sniper}")
-        except Exception:
-            mute_text = f"{target.mention} was found, but I could not mute them. Check my Moderate Members permission and role position."
-
-        await public_message.edit(
-            content=(
-                f"{SNIPE_HIT_EMOJI} **SHOT HIT!**\n"
-                f"{mute_text}"
-            )
-        )
-    else:
-        await public_message.edit(
-            content=(
-                f"{SNIPE_MISS_EMOJI} **SHOT MISSED!**\n"
-                f"{target.mention} escaped safely."
-            )
-        )
 
 
 @bot.tree.command(name="opencrate", description="Open a Loot Crate or Legendary Loot Crate.")
