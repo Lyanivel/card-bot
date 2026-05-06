@@ -62,6 +62,7 @@ TITLE_EMOJI = "<:title:1499751841481752686>"
 SANC4OOS_EMOJI = "<:sanc4oos:1499903033042276493>"
 CUSTOM_EMOJI_SHOP = "<:customemoji:1499912654528053329>"
 SNIPE_EMOJI = "<:snipe:1501413204939641025>"
+LEGENDARY_SNIPER_EMOJI = "<:legendarysnipe:1501572128544391249>"
 BUSH_1_EMOJI = "<:bush:1501411561758003313>"
 BUSH_2_EMOJI = "<:bush:1501411561758003313>"
 BUSH_3_EMOJI = "<:bush:1501411561758003313>"
@@ -368,6 +369,16 @@ async def setup_database():
                 guild_id BIGINT PRIMARY KEY,
                 staff_snipe_enabled BOOLEAN NOT NULL DEFAULT TRUE
             );
+        """)
+
+        await conn.execute("""
+            ALTER TABLE snipe_settings
+            ADD COLUMN IF NOT EXISTS snipe_cooldown_seconds BIGINT DEFAULT 300;
+        """)
+
+        await conn.execute("""
+            ALTER TABLE snipe_settings
+            ADD COLUMN IF NOT EXISTS snipe_mute_minutes BIGINT DEFAULT 5;
         """)
 
 # ---------------- HELPERS ----------------
@@ -1364,6 +1375,71 @@ async def set_staff_snipe_enabled(guild_id, enabled: bool):
         """, guild_id, enabled)
 
 
+
+async def get_snipe_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT staff_snipe_enabled, snipe_cooldown_seconds, snipe_mute_minutes FROM snipe_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+        if not row:
+            await conn.execute("""
+                INSERT INTO snipe_settings (guild_id, staff_snipe_enabled, snipe_cooldown_seconds, snipe_mute_minutes)
+                VALUES ($1, TRUE, $2, $3)
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id, SNIPE_COOLDOWN, SNIPE_MUTE_MINUTES)
+
+            return {
+                "staff_snipe_enabled": True,
+                "snipe_cooldown_seconds": SNIPE_COOLDOWN,
+                "snipe_mute_minutes": SNIPE_MUTE_MINUTES
+            }
+
+        return {
+            "staff_snipe_enabled": row["staff_snipe_enabled"],
+            "snipe_cooldown_seconds": row["snipe_cooldown_seconds"] or SNIPE_COOLDOWN,
+            "snipe_mute_minutes": row["snipe_mute_minutes"] or SNIPE_MUTE_MINUTES
+        }
+
+
+async def set_staff_snipe_enabled(guild_id, enabled: bool):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO snipe_settings (guild_id, staff_snipe_enabled, snipe_cooldown_seconds, snipe_mute_minutes)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET staff_snipe_enabled = EXCLUDED.staff_snipe_enabled
+        """, guild_id, enabled, SNIPE_COOLDOWN, SNIPE_MUTE_MINUTES)
+
+
+async def set_snipe_cooldown_db(guild_id, minutes: int):
+    seconds = minutes * 60
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO snipe_settings (guild_id, staff_snipe_enabled, snipe_cooldown_seconds, snipe_mute_minutes)
+            VALUES ($1, TRUE, $2, $3)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET snipe_cooldown_seconds = EXCLUDED.snipe_cooldown_seconds
+        """, guild_id, seconds, SNIPE_MUTE_MINUTES)
+
+
+async def set_snipe_mute_minutes_db(guild_id, minutes: int):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO snipe_settings (guild_id, staff_snipe_enabled, snipe_cooldown_seconds, snipe_mute_minutes)
+            VALUES ($1, TRUE, $2, $3)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET snipe_mute_minutes = EXCLUDED.snipe_mute_minutes
+        """, guild_id, SNIPE_COOLDOWN, minutes)
+
+
+async def get_staff_snipe_enabled(guild_id):
+    settings = await get_snipe_settings(guild_id)
+    return settings["staff_snipe_enabled"]
+
+
 async def choose_random_card_with_weights(weights):
     rarity = random.choices(
         ["Common", "Rare", "Epic", "Legendary"],
@@ -1607,11 +1683,12 @@ def get_bush_emoji(bush_number):
 
 
 class SnipeGameView(discord.ui.View):
-    def __init__(self, sniper, target, snipe_type="regular"):
+    def __init__(self, sniper, target, snipe_type="regular", mute_minutes=SNIPE_MUTE_MINUTES):
         super().__init__(timeout=120)
         self.sniper = sniper
         self.target = target
         self.snipe_type = snipe_type
+        self.mute_minutes = mute_minutes
         self.bush_count = 3 if snipe_type == "legendary" else 5
         self.phase = "hide"
         self.hidden_bush = None
@@ -1677,8 +1754,8 @@ class SnipeGameView(discord.ui.View):
             await set_cooldown(self.sniper.id, "snipe")
 
             if self.guessed_bush == self.hidden_bush:
-                timeout_until = discord.utils.utcnow() + timedelta(minutes=SNIPE_MUTE_MINUTES)
-                mute_text = f"{self.target.mention} was found and muted for {SNIPE_MUTE_MINUTES} minutes."
+                timeout_until = discord.utils.utcnow() + timedelta(minutes=self.mute_minutes)
+                mute_text = f"{self.target.mention} was found and muted for {self.mute_minutes} minutes."
 
                 try:
                     await self.target.timeout(timeout_until, reason=f"Snipe hit by {self.sniper}")
@@ -2010,6 +2087,142 @@ class BackToShopView(discord.ui.View):
     async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=create_shop_embed(), view=ShopView())
 
+
+# ---------------- STAFF SETTINGS UI ----------------
+
+def format_on_off(value: bool):
+    return "✅ On" if value else "❌ Off"
+
+
+async def create_settings_embed(guild_id):
+    settings = await get_snipe_settings(guild_id)
+
+    cooldown_minutes = int(settings["snipe_cooldown_seconds"] // 60)
+    mute_minutes = int(settings["snipe_mute_minutes"])
+
+    description = (
+        f"1. {format_on_off(settings['staff_snipe_enabled'])} Staff sniping\n"
+        f"2. ⏱️ Snipe cooldown: **{cooldown_minutes} minutes**\n"
+        f"3. 🔇 Snipe mute time: **{mute_minutes} minutes**\n"
+        f"4. {SNIPE_EMOJI} Regular sniper bushes: **5**\n"
+        f"5. {LEGENDARY_SNIPER_EMOJI} Legendary sniper bushes: **3**"
+    )
+
+    embed = discord.Embed(
+        title="Staff Settings",
+        description=f"**Game Configuration**\n\n{description}",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    embed.set_footer(text="Use the dropdown below to edit a setting.")
+
+    return embed
+
+
+class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
+    minutes = discord.ui.TextInput(
+        label="Cooldown in minutes",
+        placeholder="Example: 5",
+        min_length=1,
+        max_length=3
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            minutes = int(str(self.minutes).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if minutes < 1 or minutes > 120:
+            return await interaction.response.send_message("Cooldown must be between 1 and 120 minutes.", ephemeral=True)
+
+        await set_snipe_cooldown_db(interaction.guild.id, minutes)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_embed(interaction.guild.id),
+            view=SnipeSettingsView()
+        )
+
+
+class SnipeMuteModal(discord.ui.Modal, title="Set Snipe Mute Time"):
+    minutes = discord.ui.TextInput(
+        label="Mute time in minutes",
+        placeholder="Example: 5",
+        min_length=1,
+        max_length=3
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            minutes = int(str(self.minutes).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if minutes < 1 or minutes > 60:
+            return await interaction.response.send_message("Mute time must be between 1 and 60 minutes.", ephemeral=True)
+
+        await set_snipe_mute_minutes_db(interaction.guild.id, minutes)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_embed(interaction.guild.id),
+            view=SnipeSettingsView()
+        )
+
+
+class SnipeSettingsSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Toggle Staff Sniping", value="toggle_staff_snipe", description="Turn staff sniping on or off"),
+            discord.SelectOption(label="Set Snipe Cooldown", value="set_cooldown", description="Change cooldown time in minutes"),
+            discord.SelectOption(label="Set Snipe Mute Time", value="set_mute", description="Change mute time in minutes"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a setting to edit...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+        choice = self.values[0]
+
+        if choice == "toggle_staff_snipe":
+            settings = await get_snipe_settings(interaction.guild.id)
+            new_value = not settings["staff_snipe_enabled"]
+            await set_staff_snipe_enabled(interaction.guild.id, new_value)
+
+            return await interaction.response.edit_message(
+                embed=await create_settings_embed(interaction.guild.id),
+                view=SnipeSettingsView()
+            )
+
+        if choice == "set_cooldown":
+            return await interaction.response.send_modal(SnipeCooldownModal())
+
+        if choice == "set_mute":
+            return await interaction.response.send_modal(SnipeMuteModal())
+
+
+class SnipeSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(SnipeSettingsSelect())
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_embed(interaction.guild.id),
+            view=SnipeSettingsView()
+        )
+
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -2030,6 +2243,18 @@ async def on_ready():
         auto_drop.start()
 
 # ---------------- COMMANDS ----------------
+@bot.tree.command(name="settings", description="Admin only: view and edit bot game settings.")
+async def settings(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
+
+    await interaction.response.send_message(
+        embed=await create_settings_embed(interaction.guild.id),
+        view=SnipeSettingsView(),
+        ephemeral=True
+    )
+
+
 @bot.tree.command(name="ping", description="Check if the bot is online.")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Online!")
@@ -2415,11 +2640,14 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
     target = user
     sniper_id = sniper.id
     target_id = target.id
+    snipe_settings = await get_snipe_settings(interaction.guild.id)
+    snipe_cooldown = int(snipe_settings["snipe_cooldown_seconds"])
+    snipe_mute_minutes = int(snipe_settings["snipe_mute_minutes"])
 
     if target.bot:
         return await interaction.response.send_message("You cannot snipe a bot.", ephemeral=True)
 
-    staff_snipe_enabled = await get_staff_snipe_enabled(interaction.guild.id)
+    staff_snipe_enabled = snipe_settings["staff_snipe_enabled"]
 
     saved_staff_role_id = await get_staff_role(interaction.guild.id)
 
@@ -2440,8 +2668,8 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
     now = int(time.time())
     last_used = await get_cooldown(sniper_id, "snipe")
 
-    if last_used and now - last_used < SNIPE_COOLDOWN:
-        remaining = SNIPE_COOLDOWN - (now - last_used)
+    if last_used and now - last_used < snipe_cooldown:
+        remaining = snipe_cooldown - (now - last_used)
         minutes = remaining // 60
         seconds = remaining % 60
 
@@ -2459,7 +2687,7 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
         )
 
     snipe_type = "legendary" if legendary_snipers > 0 else "regular"
-    view = SnipeGameView(sniper=sniper, target=target, snipe_type=snipe_type)
+    view = SnipeGameView(sniper=sniper, target=target, snipe_type=snipe_type, mute_minutes=snipe_mute_minutes)
 
     await interaction.response.send_message(
         f"{SNIPE_EMOJI} | {target.mention} is being targeted by {sniper.mention}.\n"
