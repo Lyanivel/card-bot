@@ -2370,14 +2370,11 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
     if target_id == sniper_id:
         return await interaction.response.send_message("You cannot snipe yourself.", ephemeral=True)
 
-    saved_staff_role_id = await get_staff_role(interaction.guild.id)
-    target_is_staff = target.guild_permissions.administrator or is_staff(target)
-
-    if saved_staff_role_id:
-        target_is_staff = target_is_staff or any(role.id == saved_staff_role_id for role in target.roles)
-
-    if target_is_staff:
-        return await interaction.response.send_message("You cannot snipe staff.", ephemeral=True)
+    if target.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            "You cannot snipe administrators.",
+            ephemeral=True
+        )
 
     if target.timed_out_until and target.timed_out_until > discord.utils.utcnow():
         return await interaction.response.send_message("That user is already muted.", ephemeral=True)
