@@ -61,8 +61,17 @@ WHEEL_SPIN_EMOJI = "<:wheelspin:1499751660006674562>"
 TITLE_EMOJI = "<:title:1499751841481752686>"
 SANC4OOS_EMOJI = "<:sanc4oos:1499903033042276493>"
 CUSTOM_EMOJI_SHOP = "<:customemoji:1499912654528053329>"
+SNIPE_EMOJI = "<:snipe:1501413204939641025>"
+BUSH_1_EMOJI = "<:bush1:1501411561758003313>"
+BUSH_2_EMOJI = "<:bush2:1501411584134742217>"
+BUSH_3_EMOJI = "<:bush3:1501411618104545411>"
+SNIPE_HIT_EMOJI = "<:bang:1501411689776808067>"
+SNIPE_MISS_EMOJI = "<:safe:1501411804025327797>"
 DAILY_BOOST_PERCENT = 25
 WEEKLY_BOOST_PERCENT = 20
+SNIPE_PRICE = 2500
+SNIPE_COOLDOWN = 10 * 60
+SNIPE_MUTE_MINUTES = 5
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
 LOOT_CRATE_IMAGE_URL = "https://cdn.discordapp.com/attachments/1493341908246859967/1499628974966444052/CCEE5E4A-7174-4490-AAFC-11C0EBE59404.png?ex=69f57dd1&is=69f42c51&hm=de07d24e7036229395f24221f8ce35b03dbb9917ecadf019dd98464b9317b396"
@@ -134,6 +143,13 @@ SHOP_ITEMS = {
         "description": "Grants one extra entry on a prize wheel you are already in. Staff must apply it manually.",
         "category": "Game Items",
         "manual_item": True
+    },
+    "sniper": {
+        "name": "Sniper",
+        "price": SNIPE_PRICE,
+        "description": "Start a snipe attempt against another user. If your shot hits, they are muted for 5 minutes.",
+        "category": "Game Items",
+        "snipe_item": "regular"
     },
     "luckboost": {
         "name": "Luck Boost",
@@ -336,6 +352,14 @@ async def setup_database():
                 guild_id BIGINT NOT NULL,
                 channel_id BIGINT NOT NULL,
                 PRIMARY KEY (guild_id, channel_id)
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS snipe_items (
+                user_id BIGINT PRIMARY KEY,
+                regular_count INTEGER NOT NULL DEFAULT 0,
+                legendary_count INTEGER NOT NULL DEFAULT 0
             );
         """)
 
@@ -544,6 +568,8 @@ def get_shop_item_emoji(item):
         return SANC4OOS_EMOJI
     if item.get("custom_emoji_request"):
         return CUSTOM_EMOJI_SHOP
+    if item.get("snipe_item"):
+        return SNIPE_EMOJI
     return ""
 
 def get_shop_item_image(item_key):
@@ -662,6 +688,15 @@ def create_shop_item_embed(item_key):
                 f"{BULLET_EMOJI} Staff will approve or deny it in the staff log\n"
                 f"{BULLET_EMOJI} If denied, your Sancs are refunded\n"
                 f"{BULLET_EMOJI} Approved emojis show after your name in /leaderboard and /inventory\n"
+            )
+        elif item.get("snipe_item"):
+            details += (
+                "**How it works:**\n"
+                f"{BULLET_EMOJI} Buy this item to receive 1 Sniper\n"
+                f"{BULLET_EMOJI} Use `/snipe` to target another user\n"
+                f"{BULLET_EMOJI} The target hides in a bush, then you guess where they hid\n"
+                f"{BULLET_EMOJI} If your shot hits, they are muted for {SNIPE_MUTE_MINUTES} minutes\n"
+                f"{BULLET_EMOJI} Snipers are consumable and disappear after use\n"
             )
         elif item.get("manual_item"):
             details += (
@@ -1236,6 +1271,64 @@ async def remove_loot_crate(user_id, crate_type="regular"):
             )
             return True
 
+
+async def get_snipe_items(user_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT regular_count, legendary_count FROM snipe_items WHERE user_id=$1",
+            user_id
+        )
+
+        if not row:
+            await conn.execute(
+                "INSERT INTO snipe_items (user_id, regular_count, legendary_count) VALUES ($1, 0, 0) ON CONFLICT (user_id) DO NOTHING",
+                user_id
+            )
+            return 0, 0
+
+        return row["regular_count"], row["legendary_count"]
+
+
+async def add_snipe_item(user_id, snipe_type="regular", amount=1):
+    column = "legendary_count" if snipe_type == "legendary" else "regular_count"
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(f"""
+            INSERT INTO snipe_items (user_id, {column})
+            VALUES ($1, $2)
+            ON CONFLICT (user_id)
+            DO UPDATE SET {column} = snipe_items.{column} + $2
+        """, user_id, amount)
+
+
+async def remove_snipe_item(user_id, snipe_type="regular"):
+    column = "legendary_count" if snipe_type == "legendary" else "regular_count"
+
+    async with db_pool.acquire() as conn:
+        async with conn.transaction():
+            count = await conn.fetchval(
+                f"SELECT {column} FROM snipe_items WHERE user_id=$1 FOR UPDATE",
+                user_id
+            )
+
+            if count is None:
+                await conn.execute(
+                    "INSERT INTO snipe_items (user_id, regular_count, legendary_count) VALUES ($1, 0, 0) ON CONFLICT (user_id) DO NOTHING",
+                    user_id
+                )
+                return False
+
+            if count <= 0:
+                return False
+
+            await conn.execute(
+                f"UPDATE snipe_items SET {column} = {column} - 1 WHERE user_id=$1",
+                user_id
+            )
+
+            return True
+
+
 async def choose_random_card_with_weights(weights):
     rarity = random.choices(
         ["Common", "Rare", "Epic", "Legendary"],
@@ -1465,6 +1558,63 @@ class RemoveCardView(discord.ui.View):
             embed=None,
             view=self
         )
+
+
+
+# ---------------- SNIPE GAME ----------------
+
+def get_bush_emoji(bush_number):
+    return {
+        1: BUSH_1_EMOJI,
+        2: BUSH_2_EMOJI,
+        3: BUSH_3_EMOJI,
+    }.get(bush_number, BUSH_1_EMOJI)
+
+
+class SnipeBushButton(discord.ui.Button):
+    def __init__(self, bush_number):
+        super().__init__(
+            label=f"Bush {bush_number}",
+            emoji=discord.PartialEmoji.from_str(get_bush_emoji(bush_number)),
+            style=discord.ButtonStyle.secondary
+        )
+        self.bush_number = bush_number
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.view
+
+        if interaction.user.id != view.allowed_user_id:
+            return await interaction.response.send_message("This is not your choice.", ephemeral=True)
+
+        if view.choice is not None:
+            return await interaction.response.send_message("A choice was already made.", ephemeral=True)
+
+        view.choice = self.bush_number
+
+        for child in view.children:
+            child.disabled = True
+
+        await interaction.response.edit_message(
+            content=f"{get_bush_emoji(self.bush_number)} Choice locked in.",
+            view=view
+        )
+
+        view.event.set()
+
+
+class SnipeChoiceView(discord.ui.View):
+    def __init__(self, allowed_user_id, bush_count=3):
+        super().__init__(timeout=60)
+        self.allowed_user_id = allowed_user_id
+        self.bush_count = bush_count
+        self.choice = None
+        self.event = asyncio.Event()
+
+        for bush_number in range(1, bush_count + 1):
+            self.add_item(SnipeBushButton(bush_number))
+
+    async def on_timeout(self):
+        self.event.set()
 
 
 # ---------------- CUSTOM EMOJI REQUEST STAFF VIEW ----------------
@@ -2074,6 +2224,12 @@ async def buy(interaction: discord.Interaction, item: str):
             ephemeral=True
         )
 
+    if shop_item.get("snipe_item"):
+        await add_snipe_item(interaction.user.id, shop_item["snipe_item"], 1)
+        return await interaction.response.send_message(
+            f"{interaction.user.mention} bought **1 {SNIPE_EMOJI} {shop_item['name']}** for **{format_coins(shop_item['price'])}**! Use `/snipe` to start a snipe."
+        )
+
     if "crate_type" in shop_item:
         await add_loot_crate(interaction.user.id, shop_item["crate_type"], 1)
         emoji = LEGENDARY_CRATE_EMOJI if shop_item.get("crate_type") == "legendary" else LOOT_CRATE_EMOJI
@@ -2132,6 +2288,151 @@ async def buy(interaction: discord.Interaction, item: str):
     await interaction.response.send_message(
         f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
     )
+
+
+@bot.tree.command(name="snipe", description="Use a Sniper to target another user.")
+@app_commands.describe(user="User to snipe")
+async def snipe(interaction: discord.Interaction, user: discord.Member):
+    sniper = interaction.user
+    target = user
+    sniper_id = sniper.id
+    target_id = target.id
+
+    if target.bot:
+        return await interaction.response.send_message("You cannot snipe a bot.", ephemeral=True)
+
+    if target_id == sniper_id:
+        return await interaction.response.send_message("You cannot snipe yourself.", ephemeral=True)
+
+    saved_staff_role_id = await get_staff_role(interaction.guild.id)
+    target_is_staff = target.guild_permissions.administrator or is_staff(target)
+
+    if saved_staff_role_id:
+        target_is_staff = target_is_staff or any(role.id == saved_staff_role_id for role in target.roles)
+
+    if target_is_staff:
+        return await interaction.response.send_message("You cannot snipe staff.", ephemeral=True)
+
+    if target.timed_out_until and target.timed_out_until > discord.utils.utcnow():
+        return await interaction.response.send_message("That user is already muted.", ephemeral=True)
+
+    now = int(time.time())
+    last_used = await get_cooldown(sniper_id, "snipe")
+
+    if last_used and now - last_used < SNIPE_COOLDOWN:
+        remaining = SNIPE_COOLDOWN - (now - last_used)
+        minutes = remaining // 60
+        seconds = remaining % 60
+
+        return await interaction.response.send_message(
+            f"You are on snipe cooldown. Try again in {minutes}m {seconds}s.",
+            ephemeral=True
+        )
+
+    regular_snipers, legendary_snipers = await get_snipe_items(sniper_id)
+
+    if regular_snipers <= 0 and legendary_snipers <= 0:
+        return await interaction.response.send_message(
+            f"You do not have any {SNIPE_EMOJI} Snipers. Buy one from `/shop` first.",
+            ephemeral=True
+        )
+
+    snipe_type = "legendary" if legendary_snipers > 0 else "regular"
+    bush_count = 2 if snipe_type == "legendary" else 3
+
+    await interaction.response.send_message(
+        f"{SNIPE_EMOJI} | {target.mention} is being targeted by {sniper.mention}..."
+    )
+
+    public_message = await interaction.original_response()
+
+    hide_view = SnipeChoiceView(target_id, bush_count=bush_count)
+
+    try:
+        await target.send(
+            f"{SNIPE_EMOJI} | {sniper.mention} is targeting you.\n"
+            f"Choose a bush to hide in.",
+            view=hide_view
+        )
+    except Exception:
+        await public_message.edit(
+            content=f"{SNIPE_MISS_EMOJI} | I could not DM {target.mention}, so the snipe was cancelled."
+        )
+        return
+
+    try:
+        await asyncio.wait_for(hide_view.event.wait(), timeout=60)
+    except asyncio.TimeoutError:
+        pass
+
+    if hide_view.choice is None:
+        await public_message.edit(
+            content=f"{SNIPE_MISS_EMOJI} | {target.mention} did not hide in time. The snipe was cancelled."
+        )
+        return
+
+    guess_view = SnipeChoiceView(sniper_id, bush_count=bush_count)
+
+    try:
+        await sniper.send(
+            f"{SNIPE_EMOJI} | {target.display_name} has hidden.\n"
+            f"Choose the bush you want to shoot.",
+            view=guess_view
+        )
+    except Exception:
+        await public_message.edit(
+            content=f"{SNIPE_MISS_EMOJI} | I could not DM {sniper.mention}, so the snipe was cancelled."
+        )
+        return
+
+    await public_message.edit(
+        content=f"{SNIPE_EMOJI} | {target.mention} has hidden. {sniper.mention} is taking the shot..."
+    )
+
+    try:
+        await asyncio.wait_for(guess_view.event.wait(), timeout=60)
+    except asyncio.TimeoutError:
+        pass
+
+    if guess_view.choice is None:
+        await public_message.edit(
+            content=f"{SNIPE_MISS_EMOJI} | {sniper.mention} did not shoot in time. {target.mention} escaped."
+        )
+        return
+
+    removed = await remove_snipe_item(sniper_id, snipe_type)
+
+    if not removed:
+        await public_message.edit(
+            content=f"{SNIPE_MISS_EMOJI} | {sniper.mention} no longer has a Sniper. The snipe was cancelled."
+        )
+        return
+
+    await set_cooldown(sniper_id, "snipe")
+
+    if guess_view.choice == hide_view.choice:
+        timeout_until = discord.utils.utcnow() + timedelta(minutes=SNIPE_MUTE_MINUTES)
+        mute_text = f"{target.mention} was found and muted for {SNIPE_MUTE_MINUTES} minutes."
+
+        try:
+            await target.timeout(timeout_until, reason=f"Snipe hit by {sniper}")
+        except Exception:
+            mute_text = f"{target.mention} was found, but I could not mute them. Check my Moderate Members permission and role position."
+
+        await public_message.edit(
+            content=(
+                f"{SNIPE_HIT_EMOJI} **SHOT HIT!**\n"
+                f"{mute_text}"
+            )
+        )
+    else:
+        await public_message.edit(
+            content=(
+                f"{SNIPE_MISS_EMOJI} **SHOT MISSED!**\n"
+                f"{target.mention} escaped safely."
+            )
+        )
+
 
 @bot.tree.command(name="opencrate", description="Open a Loot Crate or Legendary Loot Crate.")
 @app_commands.describe(crate_type="Choose which crate to open")
@@ -2230,6 +2531,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     user = user or interaction.user
     bal = await get_balance(user.id)
     regular_crates, legendary_crates = await get_loot_crates(user.id)
+    regular_snipers, legendary_snipers = await get_snipe_items(user.id)
     title = await get_title(user.id)
     custom_emoji = await get_user_custom_emoji(user.id)
     emoji_text = f" {custom_emoji}" if custom_emoji else ""
@@ -2244,7 +2546,9 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         """, user.id)
     text = f"**Balance:** {format_coins(bal)}\n"
     text += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
-    text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n\n"
+    text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n"
+    text += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
+    text += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Legendary Snipers:** {legendary_snipers}\n\n"
     if not rows:
         text += "No cards yet."
     else:
