@@ -189,12 +189,12 @@ SHOP_ITEMS = {
         "category": "Cosmetics",
         "title_text": "Sanction Elite"
     },
-    "customemoji": {
-        "name": "Custom Name Emoji",
-        "price": 15000,
-        "description": "Request a custom emoji to show after your name in leaderboard and inventory. Staff must approve.",
+    "profileemoji": {
+        "name": "Profile Emoji",
+        "price": 0,
+        "description": "Buy preset emojis to show after your name in leaderboard and inventory.",
         "category": "Cosmetics",
-        "custom_emoji_request": True
+        "profile_emoji_menu": True
     },
     "goosexchange": {
         "name": "Sanc to Goos Exchange",
@@ -313,6 +313,32 @@ async def setup_database():
             CREATE TABLE IF NOT EXISTS user_custom_emojis (
                 user_id BIGINT PRIMARY KEY,
                 emoji TEXT NOT NULL
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS profile_emojis (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE NOT NULL,
+                emoji TEXT NOT NULL,
+                price BIGINT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_owned_profile_emojis (
+                user_id BIGINT NOT NULL,
+                profile_emoji_id INTEGER NOT NULL REFERENCES profile_emojis(id),
+                PRIMARY KEY (user_id, profile_emoji_id)
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_owned_titles (
+                user_id BIGINT NOT NULL,
+                title TEXT NOT NULL,
+                PRIMARY KEY (user_id, title)
             );
         """)
 
@@ -606,7 +632,7 @@ def get_shop_item_emoji(item):
         return TITLE_EMOJI
     if item.get("exchange_menu") or "goos_amount" in item:
         return SANC4OOS_EMOJI
-    if item.get("custom_emoji_request"):
+    if item.get("profile_emoji_menu"):
         return CUSTOM_EMOJI_SHOP
     if item.get("snipe_item"):
         return SNIPE_EMOJI
@@ -631,7 +657,7 @@ def get_shop_item_image(item_key):
         return TITLE_IMAGE_URL
     if item_key == "goosexchange" or item_key.startswith("goos"):
         return SANC4OOS_IMAGE_URL
-    if item_key == "customemoji":
+    if item_key == "profileemoji":
         return CUSTOM_EMOJI_IMAGE_URL
     return ""
 
@@ -721,13 +747,12 @@ def create_shop_item_embed(item_key):
                 f"{BULLET_EMOJI} {item['title_text']}\n"
                 f"{BULLET_EMOJI} Shows in /inventory and /leaderboard\n"
             )
-        elif item.get("custom_emoji_request"):
+        elif item.get("profile_emoji_menu"):
             details += (
                 "**How it works:**\n"
-                f"{BULLET_EMOJI} Buy this item, then paste the emoji you want\n"
-                f"{BULLET_EMOJI} Staff will approve or deny it in the staff log\n"
-                f"{BULLET_EMOJI} If denied, your Sancs are refunded\n"
-                f"{BULLET_EMOJI} Approved emojis show after your name in /leaderboard and /inventory\n"
+                f"{BULLET_EMOJI} Buy preset profile emojis from `/buy`\n"
+                f"{BULLET_EMOJI} Use `/equipemoji` to change your active emoji\n"
+                f"{BULLET_EMOJI} Equipped emojis show after your name in /leaderboard and /inventory\n"
             )
         elif item.get("snipe_item"):
             details += (
@@ -768,12 +793,46 @@ def create_shop_item_embed(item_key):
 
     return embed
 
+
+async def create_profile_emoji_shop_embed():
+    rows = await get_active_profile_emojis()
+
+    if not rows:
+        details = "No profile emojis are available right now."
+    else:
+        grouped = {}
+
+        for row in rows:
+            grouped.setdefault(row["price"], []).append(row)
+
+        details = ""
+
+        for price in sorted(grouped.keys()):
+            details += f"**{format_coins(price)}**\n"
+
+            for row in grouped[price]:
+                details += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}`\n"
+
+            details += "\n"
+
+        details += "Use `/buy` and choose the emoji name to purchase."
+
+    embed = discord.Embed(
+        title=f"{CUSTOM_EMOJI_SHOP} Profile Emoji Shop",
+        description=details,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=CUSTOM_EMOJI_IMAGE_URL)
+    embed.set_footer(text="Staff can add more options with /addprofileemoji.")
+
+    return embed
+
 def card_label(card):
-    return f"ID: {card['id']} {card['name']} ({card['rarity']})"
+    return f"**ID:** `{card['id']}` {card['name']} ({card['rarity']})"
 
 def format_card_line(card, amount=None, limited_note=""):
     amount_text = f" x{amount}" if amount is not None else ""
-    return f"ID: {card['id']} {card['name']} ({card['rarity']}){amount_text}{limited_note}"
+    return f"**ID:** `{card['id']}` {card['name']} ({card['rarity']}){amount_text}{limited_note}"
 
 def clean_card_ref(card_ref: str):
     return card_ref.strip().replace("#", "").replace("ID", "").replace("id", "").strip()
@@ -781,7 +840,7 @@ def clean_card_ref(card_ref: str):
 def create_card_embed(card):
     embed = discord.Embed(
         title=f"{card['rarity']} Card Drop!",
-        description=f"**{card['name']}** appeared!\n`ID: {card['id']}`",
+        description=f"**{card['name']}** appeared!\n**ID:** `{card['id']}`",
         color=get_color(card["rarity"])
     )
     embed.set_image(url=card["image"])
@@ -1136,6 +1195,90 @@ async def get_user_custom_emoji(user_id):
             "SELECT emoji FROM user_custom_emojis WHERE user_id=$1",
             user_id
         )
+
+
+async def add_profile_emoji_to_shop(name, emoji, price):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval("""
+            INSERT INTO profile_emojis (name, emoji, price, is_active)
+            VALUES ($1, $2, $3, TRUE)
+            ON CONFLICT (name)
+            DO UPDATE SET emoji=$2, price=$3, is_active=TRUE
+            RETURNING id
+        """, name, emoji, price)
+
+
+async def remove_profile_emoji_from_shop(name):
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE profile_emojis SET is_active=FALSE WHERE LOWER(name)=LOWER($1)",
+            name
+        )
+        return result.endswith("1")
+
+
+async def get_active_profile_emojis():
+    async with db_pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM profile_emojis WHERE is_active=TRUE ORDER BY price, name"
+        )
+
+
+async def get_profile_emoji_by_id(profile_emoji_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM profile_emojis WHERE id=$1 AND is_active=TRUE",
+            profile_emoji_id
+        )
+
+
+async def user_owns_profile_emoji(user_id, profile_emoji_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT 1 FROM user_owned_profile_emojis WHERE user_id=$1 AND profile_emoji_id=$2",
+            user_id,
+            profile_emoji_id
+        )
+
+
+async def add_profile_emoji_to_user(user_id, profile_emoji_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_owned_profile_emojis (user_id, profile_emoji_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+        """, user_id, profile_emoji_id)
+
+
+async def get_user_owned_profile_emojis(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT profile_emojis.id, profile_emojis.name, profile_emojis.emoji, profile_emojis.price
+            FROM user_owned_profile_emojis
+            JOIN profile_emojis ON profile_emojis.id = user_owned_profile_emojis.profile_emoji_id
+            WHERE user_owned_profile_emojis.user_id=$1
+            AND profile_emojis.is_active=TRUE
+            ORDER BY profile_emojis.price, profile_emojis.name
+        """, user_id)
+
+
+async def add_owned_title(user_id, title):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_owned_titles (user_id, title)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+        """, user_id, title)
+
+
+async def get_user_owned_titles(user_id):
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT title FROM user_owned_titles WHERE user_id=$1 ORDER BY title",
+            user_id
+        )
+        return [row["title"] for row in rows]
+
 
 
 async def create_custom_emoji_request(user_id, emoji, price):
@@ -1518,12 +1661,52 @@ async def all_active_cards_autocomplete(interaction: discord.Interaction, curren
     ][:25]
 
 async def shop_autocomplete(interaction: discord.Interaction, current: str):
-    return [
+    choices = [
         app_commands.Choice(name=item["name"], value=key)
         for key, item in SHOP_ITEMS.items()
-        if key != "goosexchange" and (current.lower() in item["name"].lower() or current.lower() in key.lower())
+        if key != "goosexchange"
+        and not item.get("profile_emoji_menu")
+        and (current.lower() in item["name"].lower() or current.lower() in key.lower())
+    ]
+
+    try:
+        profile_emojis = await get_active_profile_emojis()
+
+        for emoji_row in profile_emojis:
+            label = f"{emoji_row['emoji']} {emoji_row['name']} ({emoji_row['price']:,} Sancs)"
+
+            if current.lower() in label.lower() or current.lower() in emoji_row["name"].lower():
+                choices.append(
+                    app_commands.Choice(
+                        name=label[:100],
+                        value=f"profileemoji:{emoji_row['id']}"
+                    )
+                )
+    except Exception:
+        pass
+
+    return choices[:25]
+
+
+
+async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, current: str):
+    rows = await get_user_owned_profile_emojis(interaction.user.id)
+
+    return [
+        app_commands.Choice(name=f"{row['emoji']} {row['name']}", value=str(row["id"]))
+        for row in rows
+        if current.lower() in row["name"].lower() or current.lower() in row["emoji"].lower()
     ][:25]
 
+
+async def owned_title_autocomplete(interaction: discord.Interaction, current: str):
+    titles = await get_user_owned_titles(interaction.user.id)
+
+    return [
+        app_commands.Choice(name=title, value=title)
+        for title in titles
+        if current.lower() in title.lower()
+    ][:25]
 
 # ---------------- AUTO DROP ----------------
 async def choose_random_card():
@@ -1590,7 +1773,7 @@ class ClaimView(discord.ui.View):
         found_crate = random.randint(1, 100) <= CLAIM_LOOT_CRATE_CHANCE
         if found_crate:
             await add_loot_crate(uid, "regular", 1)
-        content = f"{interaction.user.mention} claimed **{self.card['name']}**! `ID: {self.card['id']}`"
+        content = f"{interaction.user.mention} claimed **{self.card['name']}**! **ID:** `{self.card['id']}`"
         if found_crate:
             content += f"\n{GIFT_BOX_EMOJI} You found a Loot Crate! Use `/opencrate`"
         await interaction.response.edit_message(
@@ -1673,7 +1856,7 @@ class RemoveCardView(discord.ui.View):
         await log_removed_card(interaction, self.card)
         await interaction.response.edit_message(
             content=(
-                f"**{self.card['name']}** `ID: {self.card['id']}` has been removed from future drops and card lists.\n"
+                f"**{self.card['name']}** **ID:** `{self.card['id']}` has been removed from future drops and card lists.\n"
                 f"Members who already own it will keep it in their inventories."
             ),
             embed=None,
@@ -2103,6 +2286,8 @@ class ShopSelect(discord.ui.Select):
 
         if item_key == "goosexchange":
             await interaction.response.edit_message(embed=embed, view=ExchangeItemView())
+        elif item_key == "profileemoji":
+            await interaction.response.edit_message(embed=await create_profile_emoji_shop_embed(), view=BackToShopView())
         else:
             await interaction.response.edit_message(embed=embed, view=BackToShopView())
 
@@ -2517,6 +2702,44 @@ async def viewtitles(interaction: discord.Interaction):
 @app_commands.describe(item="Choose an item to buy")
 @app_commands.autocomplete(item=shop_autocomplete)
 async def buy(interaction: discord.Interaction, item: str):
+    if item.startswith("profileemoji:"):
+        try:
+            profile_emoji_id = int(item.split(":", 1)[1])
+        except ValueError:
+            return await interaction.response.send_message("That profile emoji does not exist.", ephemeral=True)
+
+        profile_emoji = await get_profile_emoji_by_id(profile_emoji_id)
+
+        if not profile_emoji:
+            return await interaction.response.send_message("That profile emoji does not exist.", ephemeral=True)
+
+        if await user_owns_profile_emoji(interaction.user.id, profile_emoji_id):
+            return await interaction.response.send_message(
+                f"You already own **{profile_emoji['name']}** {profile_emoji['emoji']}. Use `/equipemoji` to equip it.",
+                ephemeral=True
+            )
+
+        success = await subtract_balance(interaction.user.id, profile_emoji["price"])
+
+        if not success:
+            return await interaction.response.send_message(
+                f"You do not have enough currency. This costs **{format_coins(profile_emoji['price'])}**.",
+                ephemeral=True
+            )
+
+        await add_profile_emoji_to_user(interaction.user.id, profile_emoji_id)
+        await set_user_custom_emoji(interaction.user.id, profile_emoji["emoji"])
+
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO purchases (user_id, item_key, item_name, price)
+                VALUES ($1, $2, $3, $4)
+            """, interaction.user.id, f"profileemoji:{profile_emoji_id}", profile_emoji["name"], profile_emoji["price"])
+
+        return await interaction.response.send_message(
+            f"{interaction.user.mention} bought and equipped **{profile_emoji['name']}** {profile_emoji['emoji']} for **{format_coins(profile_emoji['price'])}**!"
+        )
+
     if item not in SHOP_ITEMS:
         return await interaction.response.send_message("That shop item does not exist.", ephemeral=True)
     shop_item = SHOP_ITEMS[item]
@@ -2531,56 +2754,6 @@ async def buy(interaction: discord.Interaction, item: str):
             INSERT INTO purchases (user_id, item_key, item_name, price)
             VALUES ($1, $2, $3, $4)
         """, interaction.user.id, item, shop_item["name"], shop_item["price"])
-    if shop_item.get("custom_emoji_request"):
-        await interaction.response.send_message(
-            "Paste the emoji you want to use after your name. You have 60 seconds.",
-            ephemeral=True
-        )
-
-        def check(message):
-            return (
-                message.author.id == interaction.user.id
-                and message.channel.id == interaction.channel.id
-                and len(message.content.strip()) > 0
-            )
-
-        try:
-            msg = await bot.wait_for("message", check=check, timeout=60)
-        except Exception:
-            await add_balance(interaction.user.id, shop_item["price"])
-            return await interaction.followup.send(
-                "Timed out. Your Sancs were refunded. Try buying the item again when you are ready.",
-                ephemeral=True
-            )
-
-        requested_emoji = msg.content.strip()
-
-        request_id = await create_custom_emoji_request(
-            interaction.user.id,
-            requested_emoji,
-            shop_item["price"]
-        )
-
-        log_sent = await send_custom_emoji_log(
-            interaction,
-            request_id,
-            requested_emoji,
-            shop_item["price"]
-        )
-
-        if not log_sent:
-            await add_balance(interaction.user.id, shop_item["price"])
-            return await interaction.followup.send(
-                "I could not send this to the staff log, so your Sancs were refunded. Ask an admin to check `/setgooslogchannel`.",
-                ephemeral=True
-            )
-
-        return await interaction.followup.send(
-            f"{CUSTOM_EMOJI_SHOP} Custom emoji request submitted: {requested_emoji}\n"
-            f"Staff will approve or deny it. If denied, your Sancs will be refunded.",
-            ephemeral=True
-        )
-
     if shop_item.get("snipe_item"):
         await add_snipe_item(interaction.user.id, shop_item["snipe_item"], 1)
         return await interaction.response.send_message(
@@ -2612,9 +2785,10 @@ async def buy(interaction: discord.Interaction, item: str):
             f"{boost_message} until <t:{expires_at}:t>."
         )
     if "title_text" in shop_item:
+        await add_owned_title(interaction.user.id, shop_item["title_text"])
         await set_title(interaction.user.id, shop_item["title_text"])
         return await interaction.response.send_message(
-            f"{interaction.user.mention} bought the title **{shop_item['title_text']}** for **{format_coins(shop_item['price'])}**!"
+            f"{interaction.user.mention} bought and equipped the title **{shop_item['title_text']}** for **{format_coins(shop_item['price'])}**!"
         )
     if shop_item.get("manual_item"):
         return await interaction.response.send_message(
@@ -2766,10 +2940,10 @@ async def opencrate(
     rewards = f"**Sancs:** {format_coins(coins)}"
     if first_card:
         await add_card_to_inventory(user_id, first_card["id"])
-        rewards += f"\n**Card:** ID: {first_card['id']} {first_card['name']} ({first_card['rarity']})"
+        rewards += f"\n**Card:** **ID:** `{first_card['id']}` {first_card['name']} ({first_card['rarity']})"
     if second_card:
         await add_card_to_inventory(user_id, second_card["id"])
-        rewards += f"\n**Bonus Card:** ID: {second_card['id']} {second_card['name']} ({second_card['rarity']})"
+        rewards += f"\n**Bonus Card:** **ID:** `{second_card['id']}` {second_card['name']} ({second_card['rarity']})"
     embed = discord.Embed(
         title=f"{crate_emoji} {crate_name} Opened!",
         description=rewards,
@@ -2810,7 +2984,7 @@ async def cards(interaction: discord.Interaction):
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for card in grouped[rarity]:
-                text += f"{BULLET_EMOJI} ID: {card['id']} {card['name']} ({card['rarity']})\n"
+                text += f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({card['rarity']})\n"
             text += "\n"
     embed = discord.Embed(
         title="Currently Obtainable Cards",
@@ -2827,6 +3001,8 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     regular_snipers, legendary_snipers = await get_snipe_items(user.id)
     title = await get_title(user.id)
     custom_emoji = await get_user_custom_emoji(user.id)
+    owned_profile_emojis = await get_user_owned_profile_emojis(user.id)
+    owned_titles = await get_user_owned_titles(user.id)
     emoji_text = f" {custom_emoji}" if custom_emoji else ""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
@@ -2840,14 +3016,32 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     text = f"**Balance:** {format_coins(bal)}\n"
     text += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
     text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n"
-    text += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
-    text += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Legendary Snipers:** {legendary_snipers}\n\n"
+
+    if regular_snipers > 0:
+        text += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
+
+    if legendary_snipers > 0:
+        text += f"{BULLET_EMOJI} {LEGENDARY_SNIPER_EMOJI} **Legendary Snipers:** {legendary_snipers}\n"
+
+    if owned_profile_emojis:
+        text += "\n**Owned Profile Emojis**\n"
+
+        for owned_emoji in owned_profile_emojis:
+            text += f"{BULLET_EMOJI} {owned_emoji['emoji']} `{owned_emoji['name']}`\n"
+
+    if owned_titles:
+        text += "\n**Owned Titles**\n"
+
+        for owned_title in owned_titles:
+            text += f"{BULLET_EMOJI} `{owned_title}`\n"
+
+    text += "\n"
     if not rows:
         text += "No cards yet."
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"{BULLET_EMOJI} ID: {r['id']} {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
+            text += f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
     inventory_title = f"{title} {user.display_name}{emoji_text}'s Inventory" if title else f"{user.display_name}{emoji_text}'s Inventory"
     embed = discord.Embed(
         title=inventory_title,
@@ -2901,8 +3095,8 @@ async def trade(
     embed = discord.Embed(
         title="Trade Request",
         description=(
-            f"{interaction.user.mention} offers **{your_card_data['name']}** `ID: {your_card_data['id']}`\n"
-            f"in exchange for **{their_card_data['name']}** `ID: {their_card_data['id']}` from {user.mention}\n\n"
+            f"{interaction.user.mention} offers **{your_card_data['name']}** `**ID:** `{your_card_data['id']}``\n"
+            f"in exchange for **{their_card_data['name']}** `**ID:** `{their_card_data['id']}`` from {user.mention}\n\n"
             f"{user.mention}, accept or decline this trade."
         ),
         color=discord.Color.from_str("#9e659d")
@@ -2945,7 +3139,7 @@ async def addcard(
                 existing_card["id"]
             )
             return await interaction.response.send_message(
-                f"Reactivated/updated **{name}** as a **{rarity.value}** card. `ID: {existing_card['id']}`"
+                f"Reactivated/updated **{name}** as a **{rarity.value}** card. `**ID:** `{existing_card['id']}``"
             )
         new_id = await conn.fetchval(
             "INSERT INTO cards (name, rarity, image, is_active) VALUES ($1,$2,$3, TRUE) RETURNING id",
@@ -2953,7 +3147,7 @@ async def addcard(
             rarity.value,
             image
         )
-    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `ID: {new_id}`")
+    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `**ID:** `{new_id}``")
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
 @app_commands.describe(
@@ -3021,7 +3215,7 @@ async def removecard(interaction: discord.Interaction, card_name: str):
     embed = discord.Embed(
         title="Confirm Card Removal",
         description=(
-            f"Are you sure you want to remove **{card['name']}** `ID: {card['id']}` from future drops and card lists?\n\n"
+            f"Are you sure you want to remove **{card['name']}** **ID:** `{card['id']}` from future drops and card lists?\n\n"
             f"Members who already own it will **keep it**."
         ),
         color=discord.Color.red()
@@ -3031,6 +3225,110 @@ async def removecard(interaction: discord.Interaction, card_name: str):
         view=RemoveCardView(interaction.user, card),
         ephemeral=True
     )
+
+
+@bot.tree.command(name="addprofileemoji", description="Staff only: add a preset profile emoji to the shop.")
+@app_commands.describe(
+    name="Emoji display name",
+    emoji="Emoji to sell",
+    price="Price in Sancs"
+)
+async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: str, price: int):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    if price <= 0:
+        return await interaction.response.send_message("Price must be greater than 0.", ephemeral=True)
+
+    emoji_id = await add_profile_emoji_to_shop(name, emoji, price)
+
+    await interaction.response.send_message(
+        f"Added profile emoji **{name}** {emoji} for **{format_coins(price)}**. **ID:** `{emoji_id}`"
+    )
+
+
+@bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
+@app_commands.describe(name="Profile emoji name to remove")
+async def removeprofileemoji(interaction: discord.Interaction, name: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    removed = await remove_profile_emoji_from_shop(name)
+
+    if not removed:
+        return await interaction.response.send_message("That profile emoji was not found.", ephemeral=True)
+
+    await interaction.response.send_message(f"Removed **{name}** from the profile emoji shop.")
+
+
+@bot.tree.command(name="listprofileemojis", description="View all preset profile emojis in the shop.")
+async def listprofileemojis(interaction: discord.Interaction):
+    rows = await get_active_profile_emojis()
+
+    if not rows:
+        return await interaction.response.send_message("No profile emojis are in the shop yet.")
+
+    grouped = {}
+
+    for row in rows:
+        grouped.setdefault(row["price"], []).append(row)
+
+    text = ""
+
+    for price in sorted(grouped.keys()):
+        text += f"**{format_coins(price)}**\n"
+
+        for row in grouped[price]:
+            text += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}` â **ID:** `{row['id']}`\n"
+
+        text += "\n"
+
+    embed = discord.Embed(
+        title="Profile Emoji Shop List",
+        description=text,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="equipemoji", description="Equip one of your owned profile emojis.")
+@app_commands.describe(emoji="Choose an emoji you own")
+@app_commands.autocomplete(emoji=owned_profile_emoji_autocomplete)
+async def equipemoji(interaction: discord.Interaction, emoji: str):
+    try:
+        profile_emoji_id = int(emoji)
+    except ValueError:
+        return await interaction.response.send_message("That profile emoji was not found.", ephemeral=True)
+
+    if not await user_owns_profile_emoji(interaction.user.id, profile_emoji_id):
+        return await interaction.response.send_message("You do not own that profile emoji.", ephemeral=True)
+
+    profile_emoji = await get_profile_emoji_by_id(profile_emoji_id)
+
+    if not profile_emoji:
+        return await interaction.response.send_message("That profile emoji is no longer available.", ephemeral=True)
+
+    await set_user_custom_emoji(interaction.user.id, profile_emoji["emoji"])
+
+    await interaction.response.send_message(
+        f"Equipped **{profile_emoji['name']}** {profile_emoji['emoji']}."
+    )
+
+
+@bot.tree.command(name="equiptitle", description="Equip one of your owned titles.")
+@app_commands.describe(title="Choose a title you own")
+@app_commands.autocomplete(title=owned_title_autocomplete)
+async def equiptitle(interaction: discord.Interaction, title: str):
+    owned_titles = await get_user_owned_titles(interaction.user.id)
+
+    if title not in owned_titles:
+        return await interaction.response.send_message("You do not own that title.", ephemeral=True)
+
+    await set_title(interaction.user.id, title)
+
+    await interaction.response.send_message(f"Equipped title **{title}**.")
+
 
 @bot.tree.command(name="gooslogtest", description="Admin only: test the Goos log channel.")
 async def gooslogtest(interaction: discord.Interaction):
