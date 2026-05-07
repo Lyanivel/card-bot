@@ -3387,65 +3387,97 @@ class DropSettingsView(discord.ui.View):
 
 
 
-class StaffSettingsView(discord.ui.View):
+
+class StaffSettingsSelect(discord.ui.Select):
     def __init__(self):
-        super().__init__(timeout=180)
+        options = [
+            discord.SelectOption(
+                label="How To Set Staff Role",
+                value="staff_role",
+                description="Shows the slash command for setting the staff role"
+            ),
+            discord.SelectOption(
+                label="How To Set Goos Log Channel",
+                value="goos_log",
+                description="Shows the slash command for setting the log channel"
+            ),
+            discord.SelectOption(
+                label="Test Goos Log Channel",
+                value="test_log",
+                description="Sends a test message to the current log channel"
+            ),
+        ]
 
-    @discord.ui.button(label="Set Staff Role", style=discord.ButtonStyle.primary)
-    async def set_staff_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
-
-        await interaction.response.send_message(
-            "Use `/setstaffrole` and choose the staff role. Then reopen `/settings` to confirm it updated.",
-            ephemeral=True
+        super().__init__(
+            placeholder="Choose a staff setting...",
+            min_values=1,
+            max_values=1,
+            options=options
         )
 
-    @discord.ui.button(label="Set Goos Log Channel", style=discord.ButtonStyle.primary)
-    async def set_goos_log_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
-
-        await interaction.response.send_message(
-            "Use `/setgooslogchannel` and choose the staff log channel. Then reopen `/settings` to confirm it updated.",
-            ephemeral=True
-        )
-
-    @discord.ui.button(label="Test Log Channel", style=discord.ButtonStyle.success)
-    async def test_goos_log_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
-
-        channel_id = await get_goos_log_channel(interaction.guild.id)
-
-        if not channel_id:
             return await interaction.response.send_message(
-                "No Goos log channel is set. Use `/setgooslogchannel` first.",
+                "Only administrators can use this.",
                 ephemeral=True
             )
 
-        channel = interaction.guild.get_channel(channel_id) or bot.get_channel(channel_id)
+        choice = self.values[0]
 
-        if channel is None:
-            try:
-                channel = await bot.fetch_channel(channel_id)
-            except Exception:
+        if choice == "staff_role":
+            return await interaction.response.send_message(
+                "`/setstaffrole role:@RoleName`\n\nChoose the role you want staff commands tied to.",
+                ephemeral=True
+            )
+
+        if choice == "goos_log":
+            return await interaction.response.send_message(
+                "`/setgooslogchannel channel:#channel`\n\nChoose the channel where staff / goos logs should be sent.",
+                ephemeral=True
+            )
+
+        if choice == "test_log":
+            channel_id = await get_goos_log_channel(interaction.guild.id)
+
+            if not channel_id:
                 return await interaction.response.send_message(
-                    "I could not access that log channel. Check my channel permissions.",
+                    "No Goos log channel is currently set.",
                     ephemeral=True
                 )
 
-        await channel.send(f"{BULLET_EMOJI} Staff log test successful. This channel is connected.")
+            channel = interaction.guild.get_channel(channel_id) or bot.get_channel(channel_id)
 
-        await interaction.response.send_message(
-            f"Test message sent to {channel.mention}.",
-            ephemeral=True
-        )
+            if channel is None:
+                try:
+                    channel = await bot.fetch_channel(channel_id)
+                except Exception:
+                    return await interaction.response.send_message(
+                        "I could not access that channel.",
+                        ephemeral=True
+                    )
+
+            await channel.send(
+                f"{BULLET_EMOJI} Staff log test successful. This channel is connected."
+            )
+
+            return await interaction.response.send_message(
+                f"Test message sent to {channel.mention}.",
+                ephemeral=True
+            )
+
+
+class StaffSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(StaffSettingsSelect())
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+            return await interaction.response.send_message(
+                "Only administrators can use this.",
+                ephemeral=True
+            )
 
         await interaction.response.edit_message(
             embed=await create_settings_home_embed(interaction.guild.id),
@@ -3455,7 +3487,10 @@ class StaffSettingsView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
     async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+            return await interaction.response.send_message(
+                "Only administrators can refresh settings.",
+                ephemeral=True
+            )
 
         await interaction.response.edit_message(
             embed=await create_staff_settings_embed(interaction.guild.id),
