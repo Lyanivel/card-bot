@@ -86,7 +86,7 @@ SNIPE_SUCCESS_MESSAGES = [
     "{target} got caught lacking, pack it up immediately!",
     "{target} never even saw it coming.",
     "{target}? Folded instantly.",
-    "{target}, geesh you shouldâve hid better!",
+    "{target}, geesh you should’ve hid better!",
 ]
 
 SNIPE_MISS_MESSAGES = [
@@ -861,7 +861,7 @@ async def create_profile_emoji_shop_embed():
         lines = []
 
         for price in sorted(grouped.keys()):
-            lines.append(f"{format_coins(price)}")
+            lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
 
             emojis = [row["emoji"] for row in grouped[price]]
 
@@ -870,8 +870,8 @@ async def create_profile_emoji_shop_embed():
 
             lines.append("")
 
-        details = "```text\n" + "\n".join(lines).strip() + "\n```"
-        details += "\nUse `/buy` and choose `Profile Emoji` to purchase."
+        details = "\n".join(lines).strip()
+        details += "\n\nUse `/buy` and choose `Profile Emoji` to purchase."
 
     embed = discord.Embed(
         title=f"{CUSTOM_EMOJI_SHOP} Profile Emoji Shop",
@@ -3452,7 +3452,7 @@ async def listtitles(interaction: discord.Interaction):
         text += f"**{format_coins(price)}**\n"
 
         for row in grouped[price]:
-            text += f"{BULLET_EMOJI} `{row['title']}` â {format_coins(row['price'])}\n"
+            text += f"{BULLET_EMOJI} `{row['title']}` — {format_coins(row['price'])}\n"
 
         text += "\n"
 
@@ -3517,7 +3517,7 @@ async def listprofileemojis(interaction: discord.Interaction):
         text += f"**{format_coins(price)}**\n"
 
         for row in grouped[price]:
-            text += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}` â {format_coins(row['price'])}\n"
+            text += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}` — {format_coins(row['price'])}\n"
 
         text += "\n"
 
