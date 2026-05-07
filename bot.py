@@ -184,10 +184,10 @@ SHOP_ITEMS = {
     },
     "title": {
         "name": "Special Title",
-        "price": 5000,
-        "description": "Unlocks the title: Sanction Elite. More approved titles can be listed with /viewtitles.",
+        "price": 0,
+        "description": "Buy preset titles to show after your name in leaderboard and inventory.",
         "category": "Cosmetics",
-        "title_text": "Sanction Elite"
+        "title_menu": True
     },
     "profileemoji": {
         "name": "Profile Emoji",
@@ -339,6 +339,15 @@ async def setup_database():
                 user_id BIGINT NOT NULL,
                 title TEXT NOT NULL,
                 PRIMARY KEY (user_id, title)
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS shop_titles (
+                id SERIAL PRIMARY KEY,
+                title TEXT UNIQUE NOT NULL,
+                price BIGINT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE
             );
         """)
 
@@ -628,7 +637,7 @@ def get_shop_item_emoji(item):
         return MAFIA_IMMUNITY_EMOJI
     if item.get("name") == "Wheel Bonus Entry":
         return WHEEL_SPIN_EMOJI
-    if "title_text" in item:
+    if "title_text" in item or item.get("title_menu"):
         return TITLE_EMOJI
     if item.get("exchange_menu") or "goos_amount" in item:
         return SANC4OOS_EMOJI
@@ -680,8 +689,11 @@ def create_shop_embed():
         for key, item in items:
             emoji = get_shop_item_emoji(item)
             emoji_text = f"{emoji} " if emoji else ""
-            price_text = f"[{format_coins(item['price'])}]" if item.get("price", 0) > 0 else "[Choose Amount]"
-            text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}` {price_text}\n"
+            if item.get("price", 0) > 0:
+                price_text = f" [{format_coins(item['price'])}]"
+            else:
+                price_text = ""
+            text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}`{price_text}\n"
 
     embed = discord.Embed(
         title="Shop",
@@ -741,6 +753,13 @@ def create_shop_item_embed(item_key):
                 f"{BULLET_EMOJI} Adds {WEEKLY_BOOST_PERCENT}% to your next weekly claim\n"
                 f"{BULLET_EMOJI} Used automatically the next time you claim /weekly\n"
             )
+        elif item.get("title_menu"):
+            details += (
+                "**How it works:**\n"
+                f"{BULLET_EMOJI} Buy preset titles from `/buy`\n"
+                f"{BULLET_EMOJI} Use `/equiptitle` to change your active title\n"
+                f"{BULLET_EMOJI} Equipped titles show after your name in /leaderboard and /inventory\n"
+            )
         elif "title_text" in item:
             details += (
                 "**Title:**\n"
@@ -794,6 +813,40 @@ def create_shop_item_embed(item_key):
     return embed
 
 
+async def create_title_shop_embed():
+    rows = await get_active_shop_titles()
+
+    if not rows:
+        details = "No titles are available right now."
+    else:
+        grouped = {}
+
+        for row in rows:
+            grouped.setdefault(row["price"], []).append(row)
+
+        lines = []
+
+        for price in sorted(grouped.keys()):
+            lines.append(f"{format_coins(price)}")
+
+            for row in grouped[price]:
+                lines.append(f"{row['title']}")
+
+            lines.append("")
+
+        details = "```text\n" + "\n".join(lines).strip() + "\n```"
+        details += "\nUse `/buy` and choose `Special Title` to purchase."
+
+    embed = discord.Embed(
+        title=f"{TITLE_EMOJI} Title Shop",
+        description=details,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=TITLE_IMAGE_URL)
+
+    return embed
+
+
 async def create_profile_emoji_shop_embed():
     rows = await get_active_profile_emojis()
 
@@ -805,17 +858,20 @@ async def create_profile_emoji_shop_embed():
         for row in rows:
             grouped.setdefault(row["price"], []).append(row)
 
-        details = ""
+        lines = []
 
         for price in sorted(grouped.keys()):
-            details += f"**{format_coins(price)}**\n"
+            lines.append(f"{format_coins(price)}")
 
-            for row in grouped[price]:
-                details += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}`\n"
+            emojis = [row["emoji"] for row in grouped[price]]
 
-            details += "\n"
+            for index in range(0, len(emojis), 2):
+                lines.append(" ".join(emojis[index:index + 2]))
 
-        details += "Use `/buy` and choose the emoji name to purchase."
+            lines.append("")
+
+        details = "```text\n" + "\n".join(lines).strip() + "\n```"
+        details += "\nUse `/buy` and choose `Profile Emoji` to purchase."
 
     embed = discord.Embed(
         title=f"{CUSTOM_EMOJI_SHOP} Profile Emoji Shop",
@@ -823,9 +879,9 @@ async def create_profile_emoji_shop_embed():
         color=discord.Color.from_str("#9e659d")
     )
     embed.set_thumbnail(url=CUSTOM_EMOJI_IMAGE_URL)
-    embed.set_footer(text="Staff can add more options with /addprofileemoji.")
 
     return embed
+
 
 def card_label(card):
     return f"**ID:** `{card['id']}` {card['name']} ({card['rarity']})"
@@ -1279,6 +1335,50 @@ async def get_user_owned_titles(user_id):
         )
         return [row["title"] for row in rows]
 
+async def add_title_to_shop(title, price):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval("""
+            INSERT INTO shop_titles (title, price, is_active)
+            VALUES ($1, $2, TRUE)
+            ON CONFLICT (title)
+            DO UPDATE SET price=$2, is_active=TRUE
+            RETURNING id
+        """, title, price)
+
+
+async def remove_title_from_shop(title):
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE shop_titles SET is_active=FALSE WHERE LOWER(title)=LOWER($1)",
+            title
+        )
+        return result.endswith("1")
+
+
+async def get_active_shop_titles():
+    async with db_pool.acquire() as conn:
+        return await conn.fetch(
+            "SELECT * FROM shop_titles WHERE is_active=TRUE ORDER BY price, title"
+        )
+
+
+async def get_shop_title_by_id(title_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM shop_titles WHERE id=$1 AND is_active=TRUE",
+            title_id
+        )
+
+
+async def user_owns_title(user_id, title):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT 1 FROM user_owned_titles WHERE user_id=$1 AND title=$2",
+            user_id,
+            title
+        )
+
+
 
 
 async def create_custom_emoji_request(user_id, emoji, price):
@@ -1661,32 +1761,12 @@ async def all_active_cards_autocomplete(interaction: discord.Interaction, curren
     ][:25]
 
 async def shop_autocomplete(interaction: discord.Interaction, current: str):
-    choices = [
+    return [
         app_commands.Choice(name=item["name"], value=key)
         for key, item in SHOP_ITEMS.items()
         if key != "goosexchange"
-        and not item.get("profile_emoji_menu")
         and (current.lower() in item["name"].lower() or current.lower() in key.lower())
-    ]
-
-    try:
-        profile_emojis = await get_active_profile_emojis()
-
-        for emoji_row in profile_emojis:
-            label = f"{emoji_row['emoji']} {emoji_row['name']} ({emoji_row['price']:,} Sancs)"
-
-            if current.lower() in label.lower() or current.lower() in emoji_row["name"].lower():
-                choices.append(
-                    app_commands.Choice(
-                        name=label[:100],
-                        value=f"profileemoji:{emoji_row['id']}"
-                    )
-                )
-    except Exception:
-        pass
-
-    return choices[:25]
-
+    ][:25]
 
 
 async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, current: str):
@@ -2288,6 +2368,8 @@ class ShopSelect(discord.ui.Select):
             await interaction.response.edit_message(embed=embed, view=ExchangeItemView())
         elif item_key == "profileemoji":
             await interaction.response.edit_message(embed=await create_profile_emoji_shop_embed(), view=BackToShopView())
+        elif item_key == "title":
+            await interaction.response.edit_message(embed=await create_title_shop_embed(), view=BackToShopView())
         else:
             await interaction.response.edit_message(embed=embed, view=BackToShopView())
 
@@ -2302,6 +2384,126 @@ class BackToShopView(discord.ui.View):
     @discord.ui.button(label="Back to Shop", style=discord.ButtonStyle.secondary)
     async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=create_shop_embed(), view=ShopView())
+
+
+
+# ---------------- COSMETIC BUY VIEWS ----------------
+
+class ProfileEmojiBuySelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = [
+            discord.SelectOption(
+                label=f"{row['name']} - {row['price']:,} Sancs",
+                value=str(row["id"]),
+                emoji=discord.PartialEmoji.from_str(row["emoji"])
+            )
+            for row in rows[:25]
+        ]
+
+        super().__init__(
+            placeholder="Choose a profile emoji to buy...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        profile_emoji_id = int(self.values[0])
+        profile_emoji = await get_profile_emoji_by_id(profile_emoji_id)
+
+        if not profile_emoji:
+            return await interaction.response.send_message("That profile emoji does not exist anymore.", ephemeral=True)
+
+        if await user_owns_profile_emoji(interaction.user.id, profile_emoji_id):
+            return await interaction.response.send_message(
+                f"You already own **{profile_emoji['name']}** {profile_emoji['emoji']}. Use `/equipemoji` to equip it.",
+                ephemeral=True
+            )
+
+        success = await subtract_balance(interaction.user.id, profile_emoji["price"])
+
+        if not success:
+            return await interaction.response.send_message(
+                f"You do not have enough currency. This costs **{format_coins(profile_emoji['price'])}**.",
+                ephemeral=True
+            )
+
+        await add_profile_emoji_to_user(interaction.user.id, profile_emoji_id)
+        await set_user_custom_emoji(interaction.user.id, profile_emoji["emoji"])
+
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO purchases (user_id, item_key, item_name, price)
+                VALUES ($1, $2, $3, $4)
+            """, interaction.user.id, f"profileemoji:{profile_emoji_id}", profile_emoji["name"], profile_emoji["price"])
+
+        await interaction.response.send_message(
+            f"{interaction.user.mention} bought and equipped **{profile_emoji['name']}** {profile_emoji['emoji']} for **{format_coins(profile_emoji['price'])}**!"
+        )
+
+
+class ProfileEmojiBuyView(discord.ui.View):
+    def __init__(self, rows):
+        super().__init__(timeout=180)
+        self.add_item(ProfileEmojiBuySelect(rows))
+
+
+class TitleBuySelect(discord.ui.Select):
+    def __init__(self, rows):
+        options = [
+            discord.SelectOption(
+                label=f"{row['title']} - {row['price']:,} Sancs",
+                value=str(row["id"])
+            )
+            for row in rows[:25]
+        ]
+
+        super().__init__(
+            placeholder="Choose a title to buy...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        title_id = int(self.values[0])
+        shop_title = await get_shop_title_by_id(title_id)
+
+        if not shop_title:
+            return await interaction.response.send_message("That title does not exist anymore.", ephemeral=True)
+
+        if await user_owns_title(interaction.user.id, shop_title["title"]):
+            return await interaction.response.send_message(
+                f"You already own **{shop_title['title']}**. Use `/equiptitle` to equip it.",
+                ephemeral=True
+            )
+
+        success = await subtract_balance(interaction.user.id, shop_title["price"])
+
+        if not success:
+            return await interaction.response.send_message(
+                f"You do not have enough currency. This costs **{format_coins(shop_title['price'])}**.",
+                ephemeral=True
+            )
+
+        await add_owned_title(interaction.user.id, shop_title["title"])
+        await set_title(interaction.user.id, shop_title["title"])
+
+        async with db_pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO purchases (user_id, item_key, item_name, price)
+                VALUES ($1, $2, $3, $4)
+            """, interaction.user.id, f"title:{title_id}", shop_title["title"], shop_title["price"])
+
+        await interaction.response.send_message(
+            f"{interaction.user.mention} bought and equipped the title **{shop_title['title']}** for **{format_coins(shop_title['price'])}**!"
+        )
+
+
+class TitleBuyView(discord.ui.View):
+    def __init__(self, rows):
+        super().__init__(timeout=180)
+        self.add_item(TitleBuySelect(rows))
 
 
 # ---------------- STAFF SETTINGS UI ----------------
@@ -2685,60 +2887,38 @@ async def leaderboard(interaction: discord.Interaction):
 async def shop(interaction: discord.Interaction):
     await interaction.response.send_message(embed=create_shop_embed(), view=ShopView())
 
-@bot.tree.command(name="viewtitles", description="View approved titles available for purchase.")
+@bot.tree.command(name="viewtitles", description="View titles available for purchase.")
 async def viewtitles(interaction: discord.Interaction):
-    text = ""
-    for title_name, price in AVAILABLE_TITLES.items():
-        text += f"{BULLET_EMOJI} `{title_name}` [{format_coins(price)}]\n"
-    embed = discord.Embed(
-        title="Available Titles",
-        description=text or "No titles are available right now.",
-        color=discord.Color.from_str("#9e659d")
-    )
-    embed.set_footer(text="For now, /buy Special Title unlocks Sanction Elite. More title buying options can be added later.")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=await create_title_shop_embed())
 
 @bot.tree.command(name="buy", description="Buy an item from the shop.")
 @app_commands.describe(item="Choose an item to buy")
 @app_commands.autocomplete(item=shop_autocomplete)
 async def buy(interaction: discord.Interaction, item: str):
-    if item.startswith("profileemoji:"):
-        try:
-            profile_emoji_id = int(item.split(":", 1)[1])
-        except ValueError:
-            return await interaction.response.send_message("That profile emoji does not exist.", ephemeral=True)
+    if item == "profileemoji":
+        rows = await get_active_profile_emojis()
 
-        profile_emoji = await get_profile_emoji_by_id(profile_emoji_id)
-
-        if not profile_emoji:
-            return await interaction.response.send_message("That profile emoji does not exist.", ephemeral=True)
-
-        if await user_owns_profile_emoji(interaction.user.id, profile_emoji_id):
-            return await interaction.response.send_message(
-                f"You already own **{profile_emoji['name']}** {profile_emoji['emoji']}. Use `/equipemoji` to equip it.",
-                ephemeral=True
-            )
-
-        success = await subtract_balance(interaction.user.id, profile_emoji["price"])
-
-        if not success:
-            return await interaction.response.send_message(
-                f"You do not have enough currency. This costs **{format_coins(profile_emoji['price'])}**.",
-                ephemeral=True
-            )
-
-        await add_profile_emoji_to_user(interaction.user.id, profile_emoji_id)
-        await set_user_custom_emoji(interaction.user.id, profile_emoji["emoji"])
-
-        async with db_pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO purchases (user_id, item_key, item_name, price)
-                VALUES ($1, $2, $3, $4)
-            """, interaction.user.id, f"profileemoji:{profile_emoji_id}", profile_emoji["name"], profile_emoji["price"])
+        if not rows:
+            return await interaction.response.send_message("No profile emojis are available right now.", ephemeral=True)
 
         return await interaction.response.send_message(
-            f"{interaction.user.mention} bought and equipped **{profile_emoji['name']}** {profile_emoji['emoji']} for **{format_coins(profile_emoji['price'])}**!"
+            embed=await create_profile_emoji_shop_embed(),
+            view=ProfileEmojiBuyView(rows),
+            ephemeral=True
         )
+
+    if item == "title":
+        rows = await get_active_shop_titles()
+
+        if not rows:
+            return await interaction.response.send_message("No titles are available right now.", ephemeral=True)
+
+        return await interaction.response.send_message(
+            embed=await create_title_shop_embed(),
+            view=TitleBuyView(rows),
+            ephemeral=True
+        )
+
 
     if item not in SHOP_ITEMS:
         return await interaction.response.send_message("That shop item does not exist.", ephemeral=True)
@@ -2783,12 +2963,6 @@ async def buy(interaction: discord.Interaction, item: str):
             boost_message = f"{shop_item['name']} activated"
         return await interaction.response.send_message(
             f"{boost_message} until <t:{expires_at}:t>."
-        )
-    if "title_text" in shop_item:
-        await add_owned_title(interaction.user.id, shop_item["title_text"])
-        await set_title(interaction.user.id, shop_item["title_text"])
-        return await interaction.response.send_message(
-            f"{interaction.user.mention} bought and equipped the title **{shop_item['title_text']}** for **{format_coins(shop_item['price'])}**!"
         )
     if shop_item.get("manual_item"):
         return await interaction.response.send_message(
@@ -3227,6 +3401,70 @@ async def removecard(interaction: discord.Interaction, card_name: str):
     )
 
 
+@bot.tree.command(name="addtitle", description="Staff only: add a preset title to the shop.")
+@app_commands.describe(
+    title="Title text to sell",
+    price="Price in Sancs"
+)
+async def addtitle(interaction: discord.Interaction, title: str, price: int):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    if price <= 0:
+        return await interaction.response.send_message("Price must be greater than 0.", ephemeral=True)
+
+    title_id = await add_title_to_shop(title, price)
+
+    await interaction.response.send_message(
+        f"Added title **{title}** for **{format_coins(price)}**. **ID:** `{title_id}`"
+    )
+
+
+@bot.tree.command(name="removetitle", description="Staff only: remove a preset title from the shop.")
+@app_commands.describe(title="Title to remove")
+async def removetitle(interaction: discord.Interaction, title: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    removed = await remove_title_from_shop(title)
+
+    if not removed:
+        return await interaction.response.send_message("That title was not found.", ephemeral=True)
+
+    await interaction.response.send_message(f"Removed **{title}** from the title shop.")
+
+
+@bot.tree.command(name="listtitles", description="View all preset titles in the shop.")
+async def listtitles(interaction: discord.Interaction):
+    rows = await get_active_shop_titles()
+
+    if not rows:
+        return await interaction.response.send_message("No titles are in the shop yet.")
+
+    grouped = {}
+
+    for row in rows:
+        grouped.setdefault(row["price"], []).append(row)
+
+    text = ""
+
+    for price in sorted(grouped.keys()):
+        text += f"**{format_coins(price)}**\n"
+
+        for row in grouped[price]:
+            text += f"{BULLET_EMOJI} `{row['title']}` â {format_coins(row['price'])}\n"
+
+        text += "\n"
+
+    embed = discord.Embed(
+        title="Title Shop List",
+        description=text,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
 @bot.tree.command(name="addprofileemoji", description="Staff only: add a preset profile emoji to the shop.")
 @app_commands.describe(
     name="Emoji display name",
@@ -3279,7 +3517,7 @@ async def listprofileemojis(interaction: discord.Interaction):
         text += f"**{format_coins(price)}**\n"
 
         for row in grouped[price]:
-            text += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}` â **ID:** `{row['id']}`\n"
+            text += f"{BULLET_EMOJI} {row['emoji']} `{row['name']}` â {format_coins(row['price'])}\n"
 
         text += "\n"
 
