@@ -861,12 +861,13 @@ async def create_profile_emoji_shop_embed():
         lines = []
 
         for price in sorted(grouped.keys()):
-            lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
+            lines.append(f"**{price:,} Sancs**")
 
             emojis = [row["emoji"] for row in grouped[price]]
 
             for index in range(0, len(emojis), 2):
-                lines.append(" ".join(emojis[index:index + 2]))
+                pair = "      ".join(emojis[index:index + 2])
+                lines.append(pair)
 
             lines.append("")
 
