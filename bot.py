@@ -441,6 +441,18 @@ async def setup_database():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS crate_settings (
+                guild_id BIGINT PRIMARY KEY,
+                regular_crate_min INTEGER NOT NULL DEFAULT 100,
+                regular_crate_max INTEGER NOT NULL DEFAULT 500,
+                legendary_crate_min INTEGER NOT NULL DEFAULT 500,
+                legendary_crate_max INTEGER NOT NULL DEFAULT 1500,
+                legendary_second_card_chance INTEGER NOT NULL DEFAULT 20,
+                claim_loot_crate_chance INTEGER NOT NULL DEFAULT 5
+            );
+        """)
+
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS snipe_items (
                 user_id BIGINT PRIMARY KEY,
                 regular_count INTEGER NOT NULL DEFAULT 0,
@@ -675,6 +687,64 @@ async def set_economy_setting_db(guild_id, column, value: int):
     async with db_pool.acquire() as conn:
         await conn.execute(
             f"UPDATE economy_settings SET {column}=$1 WHERE guild_id=$2",
+            value,
+            guild_id
+        )
+
+
+async def get_crate_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT regular_crate_min, regular_crate_max,
+                   legendary_crate_min, legendary_crate_max,
+                   legendary_second_card_chance, claim_loot_crate_chance
+            FROM crate_settings
+            WHERE guild_id=$1
+        """, guild_id)
+
+        if not row:
+            await conn.execute("""
+                INSERT INTO crate_settings (
+                    guild_id, regular_crate_min, regular_crate_max,
+                    legendary_crate_min, legendary_crate_max,
+                    legendary_second_card_chance, claim_loot_crate_chance
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id, REGULAR_CRATE_MIN, REGULAR_CRATE_MAX,
+                 LEGENDARY_CRATE_MIN, LEGENDARY_CRATE_MAX,
+                 LEGENDARY_SECOND_CARD_CHANCE, CLAIM_LOOT_CRATE_CHANCE)
+
+            return {
+                "regular_crate_min": REGULAR_CRATE_MIN,
+                "regular_crate_max": REGULAR_CRATE_MAX,
+                "legendary_crate_min": LEGENDARY_CRATE_MIN,
+                "legendary_crate_max": LEGENDARY_CRATE_MAX,
+                "legendary_second_card_chance": LEGENDARY_SECOND_CARD_CHANCE,
+                "claim_loot_crate_chance": CLAIM_LOOT_CRATE_CHANCE
+            }
+
+        return dict(row)
+
+
+async def set_crate_setting_db(guild_id, column, value: int):
+    allowed_columns = {
+        "regular_crate_min",
+        "regular_crate_max",
+        "legendary_crate_min",
+        "legendary_crate_max",
+        "legendary_second_card_chance",
+        "claim_loot_crate_chance"
+    }
+
+    if column not in allowed_columns:
+        raise ValueError("Invalid crate setting.")
+
+    await get_crate_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE crate_settings SET {column}=$1 WHERE guild_id=$2",
             value,
             guild_id
         )
@@ -2062,7 +2132,13 @@ class ClaimView(discord.ui.View):
         last_claim_times[uid] = now
         button.disabled = True
         await add_card_to_inventory(uid, self.card["id"])
-        found_crate = random.randint(1, 100) <= CLAIM_LOOT_CRATE_CHANCE
+        claim_crate_chance = CLAIM_LOOT_CRATE_CHANCE
+
+        if interaction.guild:
+            crate_settings = await get_crate_settings(interaction.guild.id)
+            claim_crate_chance = int(crate_settings["claim_loot_crate_chance"])
+
+        found_crate = random.randint(1, 100) <= claim_crate_chance
         if found_crate:
             await add_loot_crate(uid, "regular", 1)
         content = f"{interaction.user.mention} claimed **{self.card['name']}**! **ID:** `{self.card['id']}`"
@@ -2939,12 +3015,13 @@ class EconomySettingsView(discord.ui.View):
 
 
 async def create_crate_settings_embed(guild_id):
+    settings = await get_crate_settings(guild_id)
+
     description = (
-        f"{TOGGLE_ON_EMOJI} **Regular Crate Rewards:** {REGULAR_CRATE_MIN:,} - {REGULAR_CRATE_MAX:,} Sancs\n"
-        f"{TOGGLE_ON_EMOJI} **Legendary Crate Rewards:** {LEGENDARY_CRATE_MIN:,} - {LEGENDARY_CRATE_MAX:,} Sancs\n"
-        f"{TOGGLE_ON_EMOJI} **Legendary Bonus Card Chance:** {LEGENDARY_SECOND_CARD_CHANCE}%\n"
-        f"{TOGGLE_ON_EMOJI} **Daily Loot Crate Chance:** {DAILY_LOOT_CRATE_CHANCE}%\n"
-        f"{TOGGLE_ON_EMOJI} **Claim Loot Crate Chance:** {CLAIM_LOOT_CRATE_CHANCE}%"
+        f"{TOGGLE_ON_EMOJI} **Regular Crate Rewards:** {int(settings['regular_crate_min']):,} - {int(settings['regular_crate_max']):,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Legendary Crate Rewards:** {int(settings['legendary_crate_min']):,} - {int(settings['legendary_crate_max']):,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Legendary Bonus Card Chance:** {int(settings['legendary_second_card_chance'])}%\n"
+        f"{TOGGLE_ON_EMOJI} **Claim Loot Crate Chance:** {int(settings['claim_loot_crate_chance'])}%"
     )
 
     embed = discord.Embed(
@@ -2952,9 +3029,120 @@ async def create_crate_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Choose a category to continue editing settings.")
+    embed.set_footer(text="Use the dropdown below to edit crate settings.")
 
     return embed
+
+
+
+class CrateNumberModal(discord.ui.Modal):
+    def __init__(self, title_text, setting_key, label, placeholder, min_value, max_value):
+        super().__init__(title=title_text)
+        self.setting_key = setting_key
+        self.min_value = min_value
+        self.max_value = max_value
+
+        self.value_input = discord.ui.TextInput(
+            label=label,
+            placeholder=placeholder,
+            min_length=1,
+            max_length=7
+        )
+
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(str(self.value_input).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if value < self.min_value or value > self.max_value:
+            return await interaction.response.send_message(
+                f"Value must be between {self.min_value:,} and {self.max_value:,}.",
+                ephemeral=True
+            )
+
+        await set_crate_setting_db(interaction.guild.id, self.setting_key, value)
+
+        settings = await get_crate_settings(interaction.guild.id)
+
+        if int(settings["regular_crate_min"]) > int(settings["regular_crate_max"]):
+            await set_crate_setting_db(interaction.guild.id, "regular_crate_max", int(settings["regular_crate_min"]))
+
+        if int(settings["legendary_crate_min"]) > int(settings["legendary_crate_max"]):
+            await set_crate_setting_db(interaction.guild.id, "legendary_crate_max", int(settings["legendary_crate_min"]))
+
+        await interaction.response.edit_message(
+            embed=await create_crate_settings_embed(interaction.guild.id),
+            view=CrateSettingsView()
+        )
+
+
+class CrateSettingsSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Set Regular Crate Minimum", value="regular_crate_min", description="Lowest Sanc reward from regular crates"),
+            discord.SelectOption(label="Set Regular Crate Maximum", value="regular_crate_max", description="Highest Sanc reward from regular crates"),
+            discord.SelectOption(label="Set Legendary Crate Minimum", value="legendary_crate_min", description="Lowest Sanc reward from legendary crates"),
+            discord.SelectOption(label="Set Legendary Crate Maximum", value="legendary_crate_max", description="Highest Sanc reward from legendary crates"),
+            discord.SelectOption(label="Set Legendary Bonus Card Chance", value="legendary_second_card_chance", description="Chance legendary crates give a bonus card"),
+            discord.SelectOption(label="Set Claim Loot Crate Chance", value="claim_loot_crate_chance", description="Chance card claims give a loot crate"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a crate setting to edit...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+        choice = self.values[0]
+
+        modal_settings = {
+            "regular_crate_min": ("Set Regular Crate Minimum", "Regular crate minimum Sancs", "Example: 100", 0, 1000000),
+            "regular_crate_max": ("Set Regular Crate Maximum", "Regular crate maximum Sancs", "Example: 500", 0, 1000000),
+            "legendary_crate_min": ("Set Legendary Crate Minimum", "Legendary crate minimum Sancs", "Example: 500", 0, 1000000),
+            "legendary_crate_max": ("Set Legendary Crate Maximum", "Legendary crate maximum Sancs", "Example: 1500", 0, 1000000),
+            "legendary_second_card_chance": ("Set Bonus Card Chance", "Chance percentage", "Example: 20", 0, 100),
+            "claim_loot_crate_chance": ("Set Claim Loot Crate Chance", "Chance percentage", "Example: 5", 0, 100),
+        }
+
+        title_text, label, placeholder, min_value, max_value = modal_settings[choice]
+
+        return await interaction.response.send_modal(
+            CrateNumberModal(title_text, choice, label, placeholder, min_value, max_value)
+        )
+
+
+class CrateSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(CrateSettingsSelect())
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_crate_settings_embed(interaction.guild.id),
+            view=CrateSettingsView()
+        )
 
 
 async def create_cosmetic_settings_embed(guild_id):
@@ -2987,8 +3175,7 @@ async def create_staff_settings_embed(guild_id):
 
     description = (
         f"{TOGGLE_ON_EMOJI} **Staff Role:** {staff_role_text}\n"
-        f"{TOGGLE_ON_EMOJI} **Goos / Staff Log Channel:** {goos_channel_text}\n"
-        f"\nUse `/setstaffrole`, `/setgooslogchannel`, and `/gooslogtest` for now."
+        f"{TOGGLE_ON_EMOJI} **Goos / Staff Log Channel:** {goos_channel_text}"
     )
 
     embed = discord.Embed(
@@ -2996,7 +3183,7 @@ async def create_staff_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Choose a category to continue editing settings.")
+    embed.set_footer(text="Use the buttons below to update staff settings.")
 
     return embed
 
@@ -3199,6 +3386,83 @@ class DropSettingsView(discord.ui.View):
         )
 
 
+
+class StaffSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Set Staff Role", style=discord.ButtonStyle.primary)
+    async def set_staff_role_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "Use `/setstaffrole` and choose the staff role. Then reopen `/settings` to confirm it updated.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Set Goos Log Channel", style=discord.ButtonStyle.primary)
+    async def set_goos_log_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.send_message(
+            "Use `/setgooslogchannel` and choose the staff log channel. Then reopen `/settings` to confirm it updated.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Test Log Channel", style=discord.ButtonStyle.success)
+    async def test_goos_log_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        channel_id = await get_goos_log_channel(interaction.guild.id)
+
+        if not channel_id:
+            return await interaction.response.send_message(
+                "No Goos log channel is set. Use `/setgooslogchannel` first.",
+                ephemeral=True
+            )
+
+        channel = interaction.guild.get_channel(channel_id) or bot.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except Exception:
+                return await interaction.response.send_message(
+                    "I could not access that log channel. Check my channel permissions.",
+                    ephemeral=True
+                )
+
+        await channel.send(f"{BULLET_EMOJI} Staff log test successful. This channel is connected.")
+
+        await interaction.response.send_message(
+            f"Test message sent to {channel.mention}.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_staff_settings_embed(interaction.guild.id),
+            view=StaffSettingsView()
+        )
+
+
 class SettingsCategorySelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -3244,7 +3508,7 @@ class SettingsCategorySelect(discord.ui.Select):
         if choice == "crates":
             return await interaction.response.edit_message(
                 embed=await create_crate_settings_embed(interaction.guild.id),
-                view=SettingsBackView()
+                view=CrateSettingsView()
             )
 
         if choice == "cosmetics":
@@ -3256,7 +3520,7 @@ class SettingsCategorySelect(discord.ui.Select):
         if choice == "staff":
             return await interaction.response.edit_message(
                 embed=await create_staff_settings_embed(interaction.guild.id),
-                view=SettingsBackView()
+                view=StaffSettingsView()
             )
 
 
@@ -3814,6 +4078,7 @@ async def opencrate(
     crate_type: app_commands.Choice[str]
 ):
     user_id = interaction.user.id
+    crate_settings = await get_crate_settings(interaction.guild.id)
     selected_type = crate_type.value
     removed = await remove_loot_crate(user_id, selected_type)
     if not removed:
@@ -3823,15 +4088,15 @@ async def opencrate(
             ephemeral=True
         )
     if selected_type == "legendary":
-        coins = random.randint(LEGENDARY_CRATE_MIN, LEGENDARY_CRATE_MAX)
+        coins = random.randint(int(crate_settings["legendary_crate_min"]), int(crate_settings["legendary_crate_max"]))
         first_card = await choose_legendary_crate_card(user_id)
         second_card = None
-        if random.randint(1, 100) <= LEGENDARY_SECOND_CARD_CHANCE:
+        if random.randint(1, 100) <= int(crate_settings["legendary_second_card_chance"]):
             second_card = await choose_legendary_crate_card(user_id)
         crate_emoji = LEGENDARY_CRATE_EMOJI
         crate_name = "Legendary Loot Crate"
     else:
-        coins = random.randint(REGULAR_CRATE_MIN, REGULAR_CRATE_MAX)
+        coins = random.randint(int(crate_settings["regular_crate_min"]), int(crate_settings["regular_crate_max"]))
         first_card = await choose_regular_crate_card(user_id)
         second_card = None
         crate_emoji = LOOT_CRATE_EMOJI
