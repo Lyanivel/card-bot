@@ -3170,12 +3170,18 @@ async def create_staff_settings_embed(guild_id):
     staff_role_id = await get_staff_role(guild_id)
     goos_channel_id = await get_goos_log_channel(guild_id)
 
-    staff_role_text = f"<@&{staff_role_id}>" if staff_role_id else "Not set"
-    goos_channel_text = f"<#{goos_channel_id}>" if goos_channel_id else "Not set"
+    staff_role_text = f"<@&{staff_role_id}>" if staff_role_id else "`Not Set`"
+    goos_channel_text = f"<#{goos_channel_id}>" if goos_channel_id else "`Not Set`"
 
     description = (
-        f"{TOGGLE_ON_EMOJI} **Staff Role:** {staff_role_text}\n"
-        f"{TOGGLE_ON_EMOJI} **Goos / Staff Log Channel:** {goos_channel_text}"
+        f"**Staff Role**\n"
+        f"{staff_role_text}\n"
+        f"`/setstaffrole role:@RoleName`\n\n"
+        f"**Goos / Staff Log Channel**\n"
+        f"{goos_channel_text}\n"
+        f"`/setgooslogchannel channel:#channel`\n\n"
+        f"**Test Log Channel**\n"
+        f"`/gooslogtest`"
     )
 
     embed = discord.Embed(
@@ -3183,7 +3189,6 @@ async def create_staff_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Use the buttons below to update staff settings.")
 
     return embed
 
@@ -3388,88 +3393,9 @@ class DropSettingsView(discord.ui.View):
 
 
 
-class StaffSettingsSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(
-                label="How To Set Staff Role",
-                value="staff_role",
-                description="Shows the slash command for setting the staff role"
-            ),
-            discord.SelectOption(
-                label="How To Set Goos Log Channel",
-                value="goos_log",
-                description="Shows the slash command for setting the log channel"
-            ),
-            discord.SelectOption(
-                label="Test Goos Log Channel",
-                value="test_log",
-                description="Sends a test message to the current log channel"
-            ),
-        ]
-
-        super().__init__(
-            placeholder="Choose a staff setting...",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
-
-    async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message(
-                "Only administrators can use this.",
-                ephemeral=True
-            )
-
-        choice = self.values[0]
-
-        if choice == "staff_role":
-            return await interaction.response.send_message(
-                "`/setstaffrole role:@RoleName`\n\nChoose the role you want staff commands tied to.",
-                ephemeral=True
-            )
-
-        if choice == "goos_log":
-            return await interaction.response.send_message(
-                "`/setgooslogchannel channel:#channel`\n\nChoose the channel where staff / goos logs should be sent.",
-                ephemeral=True
-            )
-
-        if choice == "test_log":
-            channel_id = await get_goos_log_channel(interaction.guild.id)
-
-            if not channel_id:
-                return await interaction.response.send_message(
-                    "No Goos log channel is currently set.",
-                    ephemeral=True
-                )
-
-            channel = interaction.guild.get_channel(channel_id) or bot.get_channel(channel_id)
-
-            if channel is None:
-                try:
-                    channel = await bot.fetch_channel(channel_id)
-                except Exception:
-                    return await interaction.response.send_message(
-                        "I could not access that channel.",
-                        ephemeral=True
-                    )
-
-            await channel.send(
-                f"{BULLET_EMOJI} Staff log test successful. This channel is connected."
-            )
-
-            return await interaction.response.send_message(
-                f"Test message sent to {channel.mention}.",
-                ephemeral=True
-            )
-
-
 class StaffSettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
-        self.add_item(StaffSettingsSelect())
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
