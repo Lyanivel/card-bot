@@ -2507,13 +2507,35 @@ class TitleBuyView(discord.ui.View):
         self.add_item(TitleBuySelect(rows))
 
 
-# ---------------- STAFF SETTINGS UI ----------------
+# ---------------- SANCTION SETTINGS UI ----------------
 
 def format_on_off(value: bool):
     return TOGGLE_ON_EMOJI if value else TOGGLE_OFF_EMOJI
 
 
-async def create_settings_embed(guild_id):
+async def create_settings_home_embed(guild_id):
+    settings = await get_snipe_settings(guild_id)
+
+    description = (
+        f"{format_on_off(settings['staff_snipe_enabled'])} **Snipe Settings**\n"
+        f"{TOGGLE_ON_EMOJI} **Card Drop Settings**\n"
+        f"{TOGGLE_ON_EMOJI} **Economy Settings**\n"
+        f"{TOGGLE_ON_EMOJI} **Crate Settings**\n"
+        f"{TOGGLE_ON_EMOJI} **Cosmetic Settings**\n"
+        f"{TOGGLE_ON_EMOJI} **Staff Settings**"
+    )
+
+    embed = discord.Embed(
+        title="Sanction Settings",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="Choose a settings category below.")
+
+    return embed
+
+
+async def create_snipe_settings_embed(guild_id):
     settings = await get_snipe_settings(guild_id)
 
     cooldown_minutes = int(settings["snipe_cooldown_seconds"] // 60)
@@ -2528,14 +2550,123 @@ async def create_settings_embed(guild_id):
     )
 
     embed = discord.Embed(
-        title="Staff Settings",
-        description=f"**Sanction Settings**\n\n{description}",
+        title="Sanction Settings — Snipe",
+        description=description,
         color=discord.Color.from_str("#9e659d")
     )
-
-    embed.set_footer(text="Use the dropdown below to edit a setting.")
+    embed.set_footer(text="Use the dropdown below to edit snipe settings.")
 
     return embed
+
+
+async def create_drop_settings_embed(guild_id):
+    channels = await get_drop_channels_db(guild_id)
+    channel_text = "None set"
+
+    if channels:
+        channel_text = "\n".join([f"<#{channel_id}>" for channel_id in channels])
+
+    description = (
+        f"{TOGGLE_ON_EMOJI} **Auto Drop Interval:** {AUTO_DROP_MINUTES} minutes\n"
+        f"{TOGGLE_ON_EMOJI} **Auto Drop Chance:** {AUTO_DROP_CHANCE}%\n"
+        f"{TOGGLE_ON_EMOJI} **Claim Cooldown:** {CLAIM_COOLDOWN} seconds\n"
+        f"\n**Drop Channels**\n{channel_text}\n\n"
+        f"Use `/adddropchannel`, `/removedropchannel`, and `/listdropchannels` for now."
+    )
+
+    embed = discord.Embed(
+        title="Sanction Settings — Card Drops",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="More drop toggles can be added here next.")
+
+    return embed
+
+
+async def create_economy_settings_embed(guild_id):
+    description = (
+        f"{TOGGLE_ON_EMOJI} **Daily Reward:** {DAILY_MIN:,} - {DAILY_MAX:,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Weekly Reward:** {WEEKLY_MIN:,} - {WEEKLY_MAX:,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Daily Streak Bonus:** {DAILY_STREAK_BONUS_AMOUNT:,} every {DAILY_STREAK_BONUS_EVERY} days\n"
+        f"\nUse `/addbal` for staff balance edits."
+    )
+
+    embed = discord.Embed(
+        title="Sanction Settings — Economy",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="Reward editing controls can be added here next.")
+
+    return embed
+
+
+async def create_crate_settings_embed(guild_id):
+    description = (
+        f"{TOGGLE_ON_EMOJI} **Regular Crate Rewards:** {REGULAR_CRATE_MIN:,} - {REGULAR_CRATE_MAX:,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Legendary Crate Rewards:** {LEGENDARY_CRATE_MIN:,} - {LEGENDARY_CRATE_MAX:,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Legendary Bonus Card Chance:** {LEGENDARY_SECOND_CARD_CHANCE}%\n"
+        f"{TOGGLE_ON_EMOJI} **Daily Loot Crate Chance:** {DAILY_LOOT_CRATE_CHANCE}%\n"
+        f"{TOGGLE_ON_EMOJI} **Claim Loot Crate Chance:** {CLAIM_LOOT_CRATE_CHANCE}%"
+    )
+
+    embed = discord.Embed(
+        title="Sanction Settings — Crates",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="Crate odds editing controls can be added here next.")
+
+    return embed
+
+
+async def create_cosmetic_settings_embed(guild_id):
+    profile_emojis = await get_active_profile_emojis()
+    titles = await get_active_shop_titles()
+
+    description = (
+        f"{TOGGLE_ON_EMOJI} **Profile Emoji Shop:** {len(profile_emojis)} active options\n"
+        f"{TOGGLE_ON_EMOJI} **Title Shop:** {len(titles)} active options\n"
+        f"\nUse `/addprofileemoji`, `/removeprofileemoji`, `/listprofileemojis`.\n"
+        f"Use `/addtitle`, `/removetitle`, `/listtitles`."
+    )
+
+    embed = discord.Embed(
+        title="Sanction Settings — Cosmetics",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="Cosmetic toggles can be added here next.")
+
+    return embed
+
+
+async def create_staff_settings_embed(guild_id):
+    staff_role_id = await get_staff_role(guild_id)
+    goos_channel_id = await get_goos_log_channel(guild_id)
+
+    staff_role_text = f"<@&{staff_role_id}>" if staff_role_id else "Not set"
+    goos_channel_text = f"<#{goos_channel_id}>" if goos_channel_id else "Not set"
+
+    description = (
+        f"{TOGGLE_ON_EMOJI} **Staff Role:** {staff_role_text}\n"
+        f"{TOGGLE_ON_EMOJI} **Goos / Staff Log Channel:** {goos_channel_text}\n"
+        f"\nUse `/setstaffrole`, `/setgooslogchannel`, and `/gooslogtest` for now."
+    )
+
+    embed = discord.Embed(
+        title="Sanction Settings — Staff",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_footer(text="Staff role/channel selectors can be added here next.")
+
+    return embed
+
+
+async def create_settings_embed(guild_id):
+    return await create_settings_home_embed(guild_id)
 
 
 class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
@@ -2558,7 +2689,7 @@ class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
         await set_snipe_cooldown_db(interaction.guild.id, minutes)
 
         await interaction.response.edit_message(
-            embed=await create_settings_embed(interaction.guild.id),
+            embed=await create_snipe_settings_embed(interaction.guild.id),
             view=SnipeSettingsView()
         )
 
@@ -2583,8 +2714,110 @@ class SnipeMuteModal(discord.ui.Modal, title="Set Snipe Mute Time"):
         await set_snipe_mute_minutes_db(interaction.guild.id, minutes)
 
         await interaction.response.edit_message(
-            embed=await create_settings_embed(interaction.guild.id),
+            embed=await create_snipe_settings_embed(interaction.guild.id),
             view=SnipeSettingsView()
+        )
+
+
+class SettingsCategorySelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Snipe Settings", value="snipe", description="Staff sniping, cooldown, mute time"),
+            discord.SelectOption(label="Card Drop Settings", value="drops", description="Auto drops, claim cooldown, drop channels"),
+            discord.SelectOption(label="Economy Settings", value="economy", description="Daily, weekly, and currency settings"),
+            discord.SelectOption(label="Crate Settings", value="crates", description="Loot crate rewards and odds"),
+            discord.SelectOption(label="Cosmetic Settings", value="cosmetics", description="Profile emojis and titles"),
+            discord.SelectOption(label="Staff Settings", value="staff", description="Staff role and log channels"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a settings category...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+        choice = self.values[0]
+
+        if choice == "snipe":
+            return await interaction.response.edit_message(
+                embed=await create_snipe_settings_embed(interaction.guild.id),
+                view=SnipeSettingsView()
+            )
+
+        if choice == "drops":
+            return await interaction.response.edit_message(
+                embed=await create_drop_settings_embed(interaction.guild.id),
+                view=SettingsBackView()
+            )
+
+        if choice == "economy":
+            return await interaction.response.edit_message(
+                embed=await create_economy_settings_embed(interaction.guild.id),
+                view=SettingsBackView()
+            )
+
+        if choice == "crates":
+            return await interaction.response.edit_message(
+                embed=await create_crate_settings_embed(interaction.guild.id),
+                view=SettingsBackView()
+            )
+
+        if choice == "cosmetics":
+            return await interaction.response.edit_message(
+                embed=await create_cosmetic_settings_embed(interaction.guild.id),
+                view=SettingsBackView()
+            )
+
+        if choice == "staff":
+            return await interaction.response.edit_message(
+                embed=await create_staff_settings_embed(interaction.guild.id),
+                view=SettingsBackView()
+            )
+
+
+class SanctionSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(SettingsCategorySelect())
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
+
+class SettingsBackView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
         )
 
 
@@ -2597,7 +2830,7 @@ class SnipeSettingsSelect(discord.ui.Select):
         ]
 
         super().__init__(
-            placeholder="Choose a setting to edit...",
+            placeholder="Choose a snipe setting to edit...",
             min_values=1,
             max_values=1,
             options=options
@@ -2615,7 +2848,7 @@ class SnipeSettingsSelect(discord.ui.Select):
             await set_staff_snipe_enabled(interaction.guild.id, new_value)
 
             return await interaction.response.edit_message(
-                embed=await create_settings_embed(interaction.guild.id),
+                embed=await create_snipe_settings_embed(interaction.guild.id),
                 view=SnipeSettingsView()
             )
 
@@ -2631,13 +2864,23 @@ class SnipeSettingsView(discord.ui.View):
         super().__init__(timeout=180)
         self.add_item(SnipeSettingsSelect())
 
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
     async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
 
         await interaction.response.edit_message(
-            embed=await create_settings_embed(interaction.guild.id),
+            embed=await create_snipe_settings_embed(interaction.guild.id),
             view=SnipeSettingsView()
         )
 
@@ -2668,8 +2911,8 @@ async def settings(interaction: discord.Interaction):
         return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
 
     await interaction.response.send_message(
-        embed=await create_settings_embed(interaction.guild.id),
-        view=SnipeSettingsView(),
+        embed=await create_settings_home_embed(interaction.guild.id),
+        view=SanctionSettingsView(),
         ephemeral=True
     )
 
