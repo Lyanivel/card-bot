@@ -861,7 +861,7 @@ async def create_profile_emoji_shop_embed():
         lines = []
 
         for price in sorted(grouped.keys()):
-            lines.append(f"**{price:,} Sancs**")
+            lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
 
             emojis = [row["emoji"] for row in grouped[price]]
 
@@ -875,7 +875,7 @@ async def create_profile_emoji_shop_embed():
         details += "\n\nUse `/buy` and choose `Profile Emoji` to purchase."
 
     embed = discord.Embed(
-        title=f"{CUSTOM_EMOJI_SHOP} Profile Emoji Shop",
+        title="Profile Emoji Shop",
         description=details,
         color=discord.Color.from_str("#9e659d")
     )
