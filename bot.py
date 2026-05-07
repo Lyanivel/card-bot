@@ -2579,7 +2579,7 @@ async def create_drop_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="More drop toggles can be added here next.")
+    embed.set_footer(text="Choose a category to continue editing settings.")
 
     return embed
 
@@ -2597,7 +2597,7 @@ async def create_economy_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Reward editing controls can be added here next.")
+    embed.set_footer(text="Choose a category to continue editing settings.")
 
     return embed
 
@@ -2616,7 +2616,7 @@ async def create_crate_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Crate odds editing controls can be added here next.")
+    embed.set_footer(text="Choose a category to continue editing settings.")
 
     return embed
 
@@ -2637,7 +2637,7 @@ async def create_cosmetic_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Cosmetic toggles can be added here next.")
+    embed.set_footer(text="Choose a category to continue editing settings.")
 
     return embed
 
@@ -2660,7 +2660,7 @@ async def create_staff_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Staff role/channel selectors can be added here next.")
+    embed.set_footer(text="Choose a category to continue editing settings.")
 
     return embed
 
