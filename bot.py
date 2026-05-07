@@ -425,6 +425,22 @@ async def setup_database():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS economy_settings (
+                guild_id BIGINT PRIMARY KEY,
+                daily_min INTEGER NOT NULL DEFAULT 75,
+                daily_max INTEGER NOT NULL DEFAULT 195,
+                weekly_min INTEGER NOT NULL DEFAULT 500,
+                weekly_max INTEGER NOT NULL DEFAULT 900,
+                daily_streak_bonus_every INTEGER NOT NULL DEFAULT 10,
+                daily_streak_bonus_amount INTEGER NOT NULL DEFAULT 500,
+                daily_loot_crate_chance INTEGER NOT NULL DEFAULT 2,
+                weekly_daily_boost_chance INTEGER NOT NULL DEFAULT 15,
+                weekly_luck_boost_chance INTEGER NOT NULL DEFAULT 10,
+                weekly_weekly_boost_chance INTEGER NOT NULL DEFAULT 5
+            );
+        """)
+
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS snipe_items (
                 user_id BIGINT PRIMARY KEY,
                 regular_count INTEGER NOT NULL DEFAULT 0,
@@ -593,6 +609,75 @@ async def set_claim_cooldown_db(guild_id, seconds: int):
             ON CONFLICT (guild_id)
             DO UPDATE SET claim_cooldown_seconds = EXCLUDED.claim_cooldown_seconds
         """, guild_id, settings["auto_drop_enabled"], settings["auto_drop_minutes"], settings["auto_drop_chance"], seconds)
+
+
+async def get_economy_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT daily_min, daily_max, weekly_min, weekly_max,
+                   daily_streak_bonus_every, daily_streak_bonus_amount,
+                   daily_loot_crate_chance, weekly_daily_boost_chance,
+                   weekly_luck_boost_chance, weekly_weekly_boost_chance
+            FROM economy_settings
+            WHERE guild_id=$1
+        """, guild_id)
+
+        if not row:
+            await conn.execute("""
+                INSERT INTO economy_settings (
+                    guild_id, daily_min, daily_max, weekly_min, weekly_max,
+                    daily_streak_bonus_every, daily_streak_bonus_amount,
+                    daily_loot_crate_chance, weekly_daily_boost_chance,
+                    weekly_luck_boost_chance, weekly_weekly_boost_chance
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id, DAILY_MIN, DAILY_MAX, WEEKLY_MIN, WEEKLY_MAX,
+                 DAILY_STREAK_BONUS_EVERY, DAILY_STREAK_BONUS_AMOUNT,
+                 DAILY_LOOT_CRATE_CHANCE, WEEKLY_DAILY_BOOST_CHANCE,
+                 WEEKLY_LUCK_BOOST_CHANCE, WEEKLY_WEEKLY_BOOST_CHANCE)
+
+            return {
+                "daily_min": DAILY_MIN,
+                "daily_max": DAILY_MAX,
+                "weekly_min": WEEKLY_MIN,
+                "weekly_max": WEEKLY_MAX,
+                "daily_streak_bonus_every": DAILY_STREAK_BONUS_EVERY,
+                "daily_streak_bonus_amount": DAILY_STREAK_BONUS_AMOUNT,
+                "daily_loot_crate_chance": DAILY_LOOT_CRATE_CHANCE,
+                "weekly_daily_boost_chance": WEEKLY_DAILY_BOOST_CHANCE,
+                "weekly_luck_boost_chance": WEEKLY_LUCK_BOOST_CHANCE,
+                "weekly_weekly_boost_chance": WEEKLY_WEEKLY_BOOST_CHANCE
+            }
+
+        return dict(row)
+
+
+async def set_economy_setting_db(guild_id, column, value: int):
+    allowed_columns = {
+        "daily_min",
+        "daily_max",
+        "weekly_min",
+        "weekly_max",
+        "daily_streak_bonus_every",
+        "daily_streak_bonus_amount",
+        "daily_loot_crate_chance",
+        "weekly_daily_boost_chance",
+        "weekly_luck_boost_chance",
+        "weekly_weekly_boost_chance"
+    }
+
+    if column not in allowed_columns:
+        raise ValueError("Invalid economy setting.")
+
+    await get_economy_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE economy_settings SET {column}=$1 WHERE guild_id=$2",
+            value,
+            guild_id
+        )
 
 
 async def is_staff_member(interaction: discord.Interaction):
@@ -2712,11 +2797,16 @@ async def create_drop_settings_embed(guild_id):
 
 
 async def create_economy_settings_embed(guild_id):
+    settings = await get_economy_settings(guild_id)
+
     description = (
-        f"{TOGGLE_ON_EMOJI} **Daily Reward:** {DAILY_MIN:,} - {DAILY_MAX:,} Sancs\n"
-        f"{TOGGLE_ON_EMOJI} **Weekly Reward:** {WEEKLY_MIN:,} - {WEEKLY_MAX:,} Sancs\n"
-        f"{TOGGLE_ON_EMOJI} **Daily Streak Bonus:** {DAILY_STREAK_BONUS_AMOUNT:,} every {DAILY_STREAK_BONUS_EVERY} days\n"
-        f"\nUse `/addbal` for staff balance edits."
+        f"{TOGGLE_ON_EMOJI} **Daily Reward:** {int(settings['daily_min']):,} - {int(settings['daily_max']):,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Weekly Reward:** {int(settings['weekly_min']):,} - {int(settings['weekly_max']):,} Sancs\n"
+        f"{TOGGLE_ON_EMOJI} **Daily Streak Bonus:** {int(settings['daily_streak_bonus_amount']):,} every {int(settings['daily_streak_bonus_every'])} days\n"
+        f"{TOGGLE_ON_EMOJI} **Daily Loot Crate Chance:** {int(settings['daily_loot_crate_chance'])}%\n"
+        f"{TOGGLE_ON_EMOJI} **Weekly Daily Boost Chance:** {int(settings['weekly_daily_boost_chance'])}%\n"
+        f"{TOGGLE_ON_EMOJI} **Weekly Luck Boost Chance:** {int(settings['weekly_luck_boost_chance'])}%\n"
+        f"{TOGGLE_ON_EMOJI} **Weekly Boost Chance:** {int(settings['weekly_weekly_boost_chance'])}%"
     )
 
     embed = discord.Embed(
@@ -2724,9 +2814,128 @@ async def create_economy_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Choose a category to continue editing settings.")
+    embed.set_footer(text="Use the dropdown below to edit economy settings.")
 
     return embed
+
+
+
+class EconomyNumberModal(discord.ui.Modal):
+    def __init__(self, title_text, setting_key, label, placeholder, min_value, max_value):
+        super().__init__(title=title_text)
+        self.setting_key = setting_key
+        self.min_value = min_value
+        self.max_value = max_value
+
+        self.value_input = discord.ui.TextInput(
+            label=label,
+            placeholder=placeholder,
+            min_length=1,
+            max_length=7
+        )
+
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(str(self.value_input).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if value < self.min_value or value > self.max_value:
+            return await interaction.response.send_message(
+                f"Value must be between {self.min_value:,} and {self.max_value:,}.",
+                ephemeral=True
+            )
+
+        await set_economy_setting_db(interaction.guild.id, self.setting_key, value)
+
+        settings = await get_economy_settings(interaction.guild.id)
+
+        if int(settings["daily_min"]) > int(settings["daily_max"]):
+            await set_economy_setting_db(interaction.guild.id, "daily_max", int(settings["daily_min"]))
+
+        if int(settings["weekly_min"]) > int(settings["weekly_max"]):
+            await set_economy_setting_db(interaction.guild.id, "weekly_max", int(settings["weekly_min"]))
+
+        await interaction.response.edit_message(
+            embed=await create_economy_settings_embed(interaction.guild.id),
+            view=EconomySettingsView()
+        )
+
+
+class EconomySettingsSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Set Daily Minimum", value="daily_min", description="Change the lowest /daily reward"),
+            discord.SelectOption(label="Set Daily Maximum", value="daily_max", description="Change the highest /daily reward"),
+            discord.SelectOption(label="Set Weekly Minimum", value="weekly_min", description="Change the lowest /weekly reward"),
+            discord.SelectOption(label="Set Weekly Maximum", value="weekly_max", description="Change the highest /weekly reward"),
+            discord.SelectOption(label="Set Streak Bonus Every", value="daily_streak_bonus_every", description="Change the streak milestone interval"),
+            discord.SelectOption(label="Set Streak Bonus Amount", value="daily_streak_bonus_amount", description="Change the streak milestone bonus"),
+            discord.SelectOption(label="Set Daily Crate Chance", value="daily_loot_crate_chance", description="Chance for /daily to drop a crate"),
+            discord.SelectOption(label="Set Weekly Daily Boost Chance", value="weekly_daily_boost_chance", description="Chance weekly gives daily boost"),
+            discord.SelectOption(label="Set Weekly Luck Boost Chance", value="weekly_luck_boost_chance", description="Chance weekly gives luck boost"),
+            discord.SelectOption(label="Set Weekly Boost Chance", value="weekly_weekly_boost_chance", description="Chance weekly gives weekly boost"),
+        ]
+
+        super().__init__(
+            placeholder="Choose an economy setting to edit...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+        choice = self.values[0]
+
+        modal_settings = {
+            "daily_min": ("Set Daily Minimum", "Daily minimum reward", "Example: 75", 0, 1000000),
+            "daily_max": ("Set Daily Maximum", "Daily maximum reward", "Example: 195", 0, 1000000),
+            "weekly_min": ("Set Weekly Minimum", "Weekly minimum reward", "Example: 500", 0, 1000000),
+            "weekly_max": ("Set Weekly Maximum", "Weekly maximum reward", "Example: 900", 0, 1000000),
+            "daily_streak_bonus_every": ("Set Streak Bonus Every", "Every how many days?", "Example: 10", 1, 365),
+            "daily_streak_bonus_amount": ("Set Streak Bonus Amount", "Bonus amount", "Example: 500", 0, 1000000),
+            "daily_loot_crate_chance": ("Set Daily Crate Chance", "Chance percentage", "Example: 2", 0, 100),
+            "weekly_daily_boost_chance": ("Set Weekly Daily Boost Chance", "Chance percentage", "Example: 15", 0, 100),
+            "weekly_luck_boost_chance": ("Set Weekly Luck Boost Chance", "Chance percentage", "Example: 10", 0, 100),
+            "weekly_weekly_boost_chance": ("Set Weekly Boost Chance", "Chance percentage", "Example: 5", 0, 100),
+        }
+
+        title_text, label, placeholder, min_value, max_value = modal_settings[choice]
+
+        return await interaction.response.send_modal(
+            EconomyNumberModal(title_text, choice, label, placeholder, min_value, max_value)
+        )
+
+
+class EconomySettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(EconomySettingsSelect())
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_economy_settings_embed(interaction.guild.id),
+            view=EconomySettingsView()
+        )
 
 
 async def create_crate_settings_embed(guild_id):
@@ -3029,7 +3238,7 @@ class SettingsCategorySelect(discord.ui.Select):
         if choice == "economy":
             return await interaction.response.edit_message(
                 embed=await create_economy_settings_embed(interaction.guild.id),
-                view=SettingsBackView()
+                view=EconomySettingsView()
             )
 
         if choice == "crates":
@@ -3207,6 +3416,7 @@ async def balance(interaction: discord.Interaction, user: discord.Member = None)
 @bot.tree.command(name="daily", description="Claim your daily Sancs and build a streak.")
 async def daily(interaction: discord.Interaction):
     user_id = interaction.user.id
+    economy_settings = await get_economy_settings(interaction.guild.id)
     today = eastern_day_number()
     async with db_pool.acquire() as conn:
         last_claim_day = await conn.fetchval(
@@ -3218,12 +3428,12 @@ async def daily(interaction: discord.Interaction):
             "You already claimed your daily today. Daily resets at midnight Eastern.",
             ephemeral=True
         )
-    amount = random.randint(DAILY_MIN, DAILY_MAX)
+    amount = random.randint(int(economy_settings["daily_min"]), int(economy_settings["daily_max"]))
     streak = await update_daily_streak(user_id)
     bonus = 0
-    if streak % DAILY_STREAK_BONUS_EVERY == 0:
-        bonus = DAILY_STREAK_BONUS_AMOUNT
-    found_crate = random.randint(1, 100) <= DAILY_LOOT_CRATE_CHANCE
+    if streak % int(economy_settings["daily_streak_bonus_every"]) == 0:
+        bonus = int(economy_settings["daily_streak_bonus_amount"])
+    found_crate = random.randint(1, 100) <= int(economy_settings["daily_loot_crate_chance"])
     boost_bonus = 0
     if await get_active_boost(user_id, "daily"):
         boost_bonus = int(amount * DAILY_BOOST_PERCENT / 100)
@@ -3249,6 +3459,7 @@ async def daily(interaction: discord.Interaction):
 @bot.tree.command(name="weekly", description="Claim your weekly reward and Loot Crate.")
 async def weekly(interaction: discord.Interaction):
     user_id = interaction.user.id
+    economy_settings = await get_economy_settings(interaction.guild.id)
     now = int(time.time())
     last_used = await get_cooldown(user_id, "weekly")
 
@@ -3268,7 +3479,7 @@ async def weekly(interaction: discord.Interaction):
 
     await asyncio.sleep(2)
 
-    amount = random.randint(WEEKLY_MIN, WEEKLY_MAX)
+    amount = random.randint(int(economy_settings["weekly_min"]), int(economy_settings["weekly_max"]))
     boost_bonus = 0
 
     if await get_active_boost(user_id, "weekly"):
@@ -3291,9 +3502,9 @@ async def weekly(interaction: discord.Interaction):
             f"{BULLET_EMOJI} {WEEKLY_BOOST_EMOJI} **Weekly Boost bonus:** {format_coins(boost_bonus)}"
         )
 
-    found_daily_boost = random.randint(1, 100) <= WEEKLY_DAILY_BOOST_CHANCE
-    found_luck_boost = random.randint(1, 100) <= WEEKLY_LUCK_BOOST_CHANCE
-    found_weekly_boost = random.randint(1, 100) <= WEEKLY_WEEKLY_BOOST_CHANCE
+    found_daily_boost = random.randint(1, 100) <= int(economy_settings["weekly_daily_boost_chance"])
+    found_luck_boost = random.randint(1, 100) <= int(economy_settings["weekly_luck_boost_chance"])
+    found_weekly_boost = random.randint(1, 100) <= int(economy_settings["weekly_weekly_boost_chance"])
 
     if found_daily_boost:
         await set_boost(user_id, "daily", 24 * 60 * 60)
