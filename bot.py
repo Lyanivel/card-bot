@@ -226,6 +226,7 @@ SHOP_ITEMS = {
     },
 }
 last_claim_times = {}
+last_auto_drop_times = {}
 active_trade_card_ids = set()
 db_pool = None
 
@@ -414,6 +415,16 @@ async def setup_database():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS drop_settings (
+                guild_id BIGINT PRIMARY KEY,
+                auto_drop_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                auto_drop_minutes INTEGER NOT NULL DEFAULT 30,
+                auto_drop_chance INTEGER NOT NULL DEFAULT 40,
+                claim_cooldown_seconds INTEGER NOT NULL DEFAULT 30
+            );
+        """)
+
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS snipe_items (
                 user_id BIGINT PRIMARY KEY,
                 regular_count INTEGER NOT NULL DEFAULT 0,
@@ -505,6 +516,84 @@ async def get_all_drop_channel_ids():
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT channel_id FROM drop_channels")
         return [row["channel_id"] for row in rows]
+
+
+async def get_drop_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT auto_drop_enabled, auto_drop_minutes, auto_drop_chance, claim_cooldown_seconds FROM drop_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+        if not row:
+            await conn.execute("""
+                INSERT INTO drop_settings (guild_id, auto_drop_enabled, auto_drop_minutes, auto_drop_chance, claim_cooldown_seconds)
+                VALUES ($1, TRUE, $2, $3, $4)
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id, AUTO_DROP_MINUTES, AUTO_DROP_CHANCE, CLAIM_COOLDOWN)
+
+            return {
+                "auto_drop_enabled": True,
+                "auto_drop_minutes": AUTO_DROP_MINUTES,
+                "auto_drop_chance": AUTO_DROP_CHANCE,
+                "claim_cooldown_seconds": CLAIM_COOLDOWN
+            }
+
+        return {
+            "auto_drop_enabled": row["auto_drop_enabled"],
+            "auto_drop_minutes": row["auto_drop_minutes"] or AUTO_DROP_MINUTES,
+            "auto_drop_chance": row["auto_drop_chance"] or AUTO_DROP_CHANCE,
+            "claim_cooldown_seconds": row["claim_cooldown_seconds"] or CLAIM_COOLDOWN
+        }
+
+
+async def set_auto_drop_enabled_db(guild_id, enabled: bool):
+    settings = await get_drop_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO drop_settings (guild_id, auto_drop_enabled, auto_drop_minutes, auto_drop_chance, claim_cooldown_seconds)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET auto_drop_enabled = EXCLUDED.auto_drop_enabled
+        """, guild_id, enabled, settings["auto_drop_minutes"], settings["auto_drop_chance"], settings["claim_cooldown_seconds"])
+
+
+async def set_auto_drop_minutes_db(guild_id, minutes: int):
+    settings = await get_drop_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO drop_settings (guild_id, auto_drop_enabled, auto_drop_minutes, auto_drop_chance, claim_cooldown_seconds)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET auto_drop_minutes = EXCLUDED.auto_drop_minutes
+        """, guild_id, settings["auto_drop_enabled"], minutes, settings["auto_drop_chance"], settings["claim_cooldown_seconds"])
+
+
+async def set_auto_drop_chance_db(guild_id, chance: int):
+    settings = await get_drop_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO drop_settings (guild_id, auto_drop_enabled, auto_drop_minutes, auto_drop_chance, claim_cooldown_seconds)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET auto_drop_chance = EXCLUDED.auto_drop_chance
+        """, guild_id, settings["auto_drop_enabled"], settings["auto_drop_minutes"], chance, settings["claim_cooldown_seconds"])
+
+
+async def set_claim_cooldown_db(guild_id, seconds: int):
+    settings = await get_drop_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO drop_settings (guild_id, auto_drop_enabled, auto_drop_minutes, auto_drop_chance, claim_cooldown_seconds)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET claim_cooldown_seconds = EXCLUDED.claim_cooldown_seconds
+        """, guild_id, settings["auto_drop_enabled"], settings["auto_drop_minutes"], settings["auto_drop_chance"], seconds)
+
 
 async def is_staff_member(interaction: discord.Interaction):
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
@@ -1810,21 +1899,52 @@ async def choose_random_card():
             return None
         return random.choice(fallback_cards)
 
-@tasks.loop(minutes=AUTO_DROP_MINUTES)
+@tasks.loop(minutes=1)
 async def auto_drop():
-    if random.randint(1, 100) > AUTO_DROP_CHANCE:
-        return
-    saved_channel_ids = await get_all_drop_channel_ids()
-    possible_channel_ids = saved_channel_ids or DROP_CHANNEL_IDS
-    if not possible_channel_ids:
-        return
-    channel = bot.get_channel(random.choice(possible_channel_ids))
-    if not channel:
-        return
-    card = await choose_random_card()
-    if not card:
-        return
-    await channel.send(embed=create_card_embed(card), view=ClaimView(card))
+    now = int(time.time())
+
+    for guild in bot.guilds:
+        settings = await get_drop_settings(guild.id)
+
+        if not settings["auto_drop_enabled"]:
+            continue
+
+        interval_seconds = int(settings["auto_drop_minutes"]) * 60
+        last_drop = last_auto_drop_times.get(guild.id, 0)
+
+        if now - last_drop < interval_seconds:
+            continue
+
+        last_auto_drop_times[guild.id] = now
+
+        if random.randint(1, 100) > int(settings["auto_drop_chance"]):
+            continue
+
+        saved_channel_ids = await get_drop_channels_db(guild.id)
+        possible_channel_ids = saved_channel_ids or DROP_CHANNEL_IDS
+
+        if not possible_channel_ids:
+            continue
+
+        available_channels = []
+
+        for channel_id in possible_channel_ids:
+            channel = guild.get_channel(channel_id) or bot.get_channel(channel_id)
+
+            if channel:
+                available_channels.append(channel)
+
+        if not available_channels:
+            continue
+
+        channel = random.choice(available_channels)
+        card = await choose_random_card()
+
+        if not card:
+            continue
+
+        await channel.send(embed=create_card_embed(card), view=ClaimView(card))
+
 
 # ---------------- CLAIM SYSTEM ----------------
 class ClaimView(discord.ui.View):
@@ -1836,9 +1956,15 @@ class ClaimView(discord.ui.View):
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         uid = interaction.user.id
         now = time.time()
+        claim_cooldown = CLAIM_COOLDOWN
+
+        if interaction.guild:
+            drop_settings = await get_drop_settings(interaction.guild.id)
+            claim_cooldown = int(drop_settings["claim_cooldown_seconds"])
+
         if uid in last_claim_times:
-            if now - last_claim_times[uid] < CLAIM_COOLDOWN:
-                remaining = int(CLAIM_COOLDOWN - (now - last_claim_times[uid]))
+            if now - last_claim_times[uid] < claim_cooldown:
+                remaining = int(claim_cooldown - (now - last_claim_times[uid]))
                 await interaction.response.send_message(
                     f"You are on cooldown. Try again in {remaining}s.",
                     ephemeral=True
@@ -2560,6 +2686,7 @@ async def create_snipe_settings_embed(guild_id):
 
 
 async def create_drop_settings_embed(guild_id):
+    settings = await get_drop_settings(guild_id)
     channels = await get_drop_channels_db(guild_id)
     channel_text = "None set"
 
@@ -2567,11 +2694,11 @@ async def create_drop_settings_embed(guild_id):
         channel_text = "\n".join([f"<#{channel_id}>" for channel_id in channels])
 
     description = (
-        f"{TOGGLE_ON_EMOJI} **Auto Drop Interval:** {AUTO_DROP_MINUTES} minutes\n"
-        f"{TOGGLE_ON_EMOJI} **Auto Drop Chance:** {AUTO_DROP_CHANCE}%\n"
-        f"{TOGGLE_ON_EMOJI} **Claim Cooldown:** {CLAIM_COOLDOWN} seconds\n"
-        f"\n**Drop Channels**\n{channel_text}\n\n"
-        f"Use `/adddropchannel`, `/removedropchannel`, and `/listdropchannels` for now."
+        f"{format_on_off(settings['auto_drop_enabled'])} **Auto Drops**\n"
+        f"{TOGGLE_ON_EMOJI} **Auto Drop Interval:** {int(settings['auto_drop_minutes'])} minutes\n"
+        f"{TOGGLE_ON_EMOJI} **Auto Drop Chance:** {int(settings['auto_drop_chance'])}%\n"
+        f"{TOGGLE_ON_EMOJI} **Claim Cooldown:** {int(settings['claim_cooldown_seconds'])} seconds\n"
+        f"\n**Drop Channels**\n{channel_text}"
     )
 
     embed = discord.Embed(
@@ -2579,7 +2706,7 @@ async def create_drop_settings_embed(guild_id):
         description=description,
         color=discord.Color.from_str("#9e659d")
     )
-    embed.set_footer(text="Choose a category to continue editing settings.")
+    embed.set_footer(text="Use the dropdown below to edit card drop settings.")
 
     return embed
 
@@ -2719,6 +2846,150 @@ class SnipeMuteModal(discord.ui.Modal, title="Set Snipe Mute Time"):
         )
 
 
+
+class AutoDropIntervalModal(discord.ui.Modal, title="Set Auto Drop Interval"):
+    minutes = discord.ui.TextInput(
+        label="Minutes between auto drop checks",
+        placeholder="Example: 30",
+        min_length=1,
+        max_length=4
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            minutes = int(str(self.minutes).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if minutes < 1 or minutes > 1440:
+            return await interaction.response.send_message("Auto drop interval must be between 1 and 1440 minutes.", ephemeral=True)
+
+        await set_auto_drop_minutes_db(interaction.guild.id, minutes)
+
+        await interaction.response.edit_message(
+            embed=await create_drop_settings_embed(interaction.guild.id),
+            view=DropSettingsView()
+        )
+
+
+class AutoDropChanceModal(discord.ui.Modal, title="Set Auto Drop Chance"):
+    chance = discord.ui.TextInput(
+        label="Chance percentage",
+        placeholder="Example: 40",
+        min_length=1,
+        max_length=3
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            chance = int(str(self.chance).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if chance < 0 or chance > 100:
+            return await interaction.response.send_message("Chance must be between 0 and 100.", ephemeral=True)
+
+        await set_auto_drop_chance_db(interaction.guild.id, chance)
+
+        await interaction.response.edit_message(
+            embed=await create_drop_settings_embed(interaction.guild.id),
+            view=DropSettingsView()
+        )
+
+
+class ClaimCooldownModal(discord.ui.Modal, title="Set Claim Cooldown"):
+    seconds = discord.ui.TextInput(
+        label="Claim cooldown in seconds",
+        placeholder="Example: 30",
+        min_length=1,
+        max_length=4
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            seconds = int(str(self.seconds).strip())
+        except ValueError:
+            return await interaction.response.send_message("Please enter a valid number.", ephemeral=True)
+
+        if seconds < 0 or seconds > 3600:
+            return await interaction.response.send_message("Claim cooldown must be between 0 and 3600 seconds.", ephemeral=True)
+
+        await set_claim_cooldown_db(interaction.guild.id, seconds)
+
+        await interaction.response.edit_message(
+            embed=await create_drop_settings_embed(interaction.guild.id),
+            view=DropSettingsView()
+        )
+
+
+class DropSettingsSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Toggle Auto Drops", value="toggle_auto_drops", description="Turn automatic card drops on or off"),
+            discord.SelectOption(label="Set Auto Drop Interval", value="set_auto_drop_interval", description="Change minutes between auto drop checks"),
+            discord.SelectOption(label="Set Auto Drop Chance", value="set_auto_drop_chance", description="Change auto drop chance percentage"),
+            discord.SelectOption(label="Set Claim Cooldown", value="set_claim_cooldown", description="Change claim cooldown in seconds"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a card drop setting to edit...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+        choice = self.values[0]
+
+        if choice == "toggle_auto_drops":
+            settings = await get_drop_settings(interaction.guild.id)
+            new_value = not settings["auto_drop_enabled"]
+            await set_auto_drop_enabled_db(interaction.guild.id, new_value)
+
+            return await interaction.response.edit_message(
+                embed=await create_drop_settings_embed(interaction.guild.id),
+                view=DropSettingsView()
+            )
+
+        if choice == "set_auto_drop_interval":
+            return await interaction.response.send_modal(AutoDropIntervalModal())
+
+        if choice == "set_auto_drop_chance":
+            return await interaction.response.send_modal(AutoDropChanceModal())
+
+        if choice == "set_claim_cooldown":
+            return await interaction.response.send_modal(ClaimCooldownModal())
+
+
+class DropSettingsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(DropSettingsSelect())
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use this.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_settings_home_embed(interaction.guild.id),
+            view=SanctionSettingsView()
+        )
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_settings(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh settings.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=await create_drop_settings_embed(interaction.guild.id),
+            view=DropSettingsView()
+        )
+
+
 class SettingsCategorySelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -2752,7 +3023,7 @@ class SettingsCategorySelect(discord.ui.Select):
         if choice == "drops":
             return await interaction.response.edit_message(
                 embed=await create_drop_settings_embed(interaction.guild.id),
-                view=SettingsBackView()
+                view=DropSettingsView()
             )
 
         if choice == "economy":
