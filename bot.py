@@ -75,6 +75,9 @@ WEEKLY_BOOST_PERCENT = 20
 SNIPE_PRICE = 2500
 SNIPE_COOLDOWN = 10 * 60
 SNIPE_MUTE_MINUTES = 5
+MAX_TRADES_PER_DAY = 5
+MAX_GIVECURRENCY_PER_DAY = 25000
+MAX_GIVECURRENCY_PER_TRANSFER = 10000
 OWNER_PROTECTION_MESSAGES = [
     "{target} SHOULD have been muted. Discord chose peace instead of violence.",
     "{target} was eliminated spiritually because Discord refused the paperwork.",
@@ -205,21 +208,21 @@ SHOP_ITEMS = {
     },
     "goos100": {
         "name": "100 Goos Exchange",
-        "price": 2500,
+        "price": 7500,
         "description": "Request 100 Goos. Staff must fulfill this manually.",
         "category": "Hidden",
         "goos_amount": 100
     },
     "goos250": {
         "name": "250 Goos Exchange",
-        "price": 6000,
+        "price": 18000,
         "description": "Request 250 Goos. Staff must fulfill this manually.",
         "category": "Hidden",
         "goos_amount": 250
     },
     "goos500": {
         "name": "500 Goos Exchange",
-        "price": 11000,
+        "price": 35000,
         "description": "Request 500 Goos. Staff must fulfill this manually.",
         "category": "Hidden",
         "goos_amount": 500
@@ -286,6 +289,17 @@ async def setup_database():
                 item_name TEXT NOT NULL,
                 price BIGINT NOT NULL,
                 purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_daily_limits (
+                user_id BIGINT NOT NULL,
+                action_name TEXT NOT NULL,
+                day_number BIGINT NOT NULL,
+                count_value BIGINT NOT NULL DEFAULT 0,
+                amount_value BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, action_name, day_number)
             );
         """)
         await conn.execute("""
@@ -1342,6 +1356,46 @@ async def transfer_balance(sender_id, receiver_id, amount):
             """, receiver_id, amount)
             return True
 
+async def get_daily_limit_row(user_id, action_name):
+    today = eastern_day_number()
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT count_value, amount_value FROM user_daily_limits WHERE user_id=$1 AND action_name=$2 AND day_number=$3",
+            user_id,
+            action_name,
+            today
+        )
+
+        if not row:
+            await conn.execute("""
+                INSERT INTO user_daily_limits (user_id, action_name, day_number, count_value, amount_value)
+                VALUES ($1, $2, $3, 0, 0)
+                ON CONFLICT DO NOTHING
+            """, user_id, action_name, today)
+
+            return {"count_value": 0, "amount_value": 0}
+
+        return {
+            "count_value": int(row["count_value"]),
+            "amount_value": int(row["amount_value"])
+        }
+
+
+async def add_daily_limit_usage(user_id, action_name, count_add=0, amount_add=0):
+    today = eastern_day_number()
+
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_daily_limits (user_id, action_name, day_number, count_value, amount_value)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (user_id, action_name, day_number)
+            DO UPDATE SET
+                count_value = user_daily_limits.count_value + $4,
+                amount_value = user_daily_limits.amount_value + $5
+        """, user_id, action_name, today, count_add, amount_add)
+
+
 async def get_cooldown(user_id, command_name):
     async with db_pool.acquire() as conn:
         return await conn.fetchval(
@@ -2178,6 +2232,9 @@ class TradeView(discord.ui.View):
             self.target.id,
             self.target_card["id"]
         )
+        await add_daily_limit_usage(self.requester.id, "trade", count_add=1)
+        await add_daily_limit_usage(self.target.id, "trade", count_add=1)
+
         self.finished = True
         self.clear_active_trade_cards()
         for child in self.children:
@@ -2564,9 +2621,9 @@ class GoosRequestView(discord.ui.View):
 class GoosExchangeSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="100 Goos", value="goos100", description="2,500 Sancs"),
-            discord.SelectOption(label="250 Goos", value="goos250", description="6,000 Sancs"),
-            discord.SelectOption(label="500 Goos", value="goos500", description="11,000 Sancs"),
+            discord.SelectOption(label="100 Goos", value="goos100", description="7,500 Sancs"),
+            discord.SelectOption(label="250 Goos", value="goos250", description="18,000 Sancs"),
+            discord.SelectOption(label="500 Goos", value="goos500", description="35,000 Sancs"),
         ]
 
         super().__init__(
@@ -3622,9 +3679,12 @@ async def settings(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="ping", description="Check if the bot is online.")
+@bot.tree.command(name="ping", description="Staff only: check if the bot is online.")
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("Online!")
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    await interaction.response.send_message("Online!", ephemeral=True)
 
 @bot.tree.command(name="balance", description="View your balance or another user's balance.")
 @app_commands.describe(user="Choose whose balance to view")
@@ -3762,12 +3822,31 @@ async def givecurrency(interaction: discord.Interaction, user: discord.Member, a
         return await interaction.response.send_message("You cannot give currency to yourself.", ephemeral=True)
     if amount <= 0:
         return await interaction.response.send_message("Amount must be greater than 0.", ephemeral=True)
+
+    if amount > MAX_GIVECURRENCY_PER_TRANSFER:
+        return await interaction.response.send_message(
+            f"You can only send up to **{format_coins(MAX_GIVECURRENCY_PER_TRANSFER)}** at once.",
+            ephemeral=True
+        )
+
+    daily_usage = await get_daily_limit_row(interaction.user.id, "givecurrency")
+
+    if daily_usage["amount_value"] + amount > MAX_GIVECURRENCY_PER_DAY:
+        remaining = max(0, MAX_GIVECURRENCY_PER_DAY - daily_usage["amount_value"])
+        return await interaction.response.send_message(
+            f"You can only send **{format_coins(MAX_GIVECURRENCY_PER_DAY)}** per day. "
+            f"You have **{format_coins(remaining)}** left today.",
+            ephemeral=True
+        )
+
     success = await transfer_balance(interaction.user.id, user.id, amount)
     if not success:
         return await interaction.response.send_message(
             "You do not have enough currency.",
             ephemeral=True
         )
+    await add_daily_limit_usage(interaction.user.id, "givecurrency", amount_add=amount)
+
     await interaction.response.send_message(
         f"{interaction.user.mention} gave {user.mention} **{format_coins(amount)}**."
     )
@@ -4217,6 +4296,21 @@ async def trade(
             f"{user.display_name} does not own **{their_card_data['name']}**.",
             ephemeral=True
         )
+    requester_trade_usage = await get_daily_limit_row(interaction.user.id, "trade")
+    target_trade_usage = await get_daily_limit_row(user.id, "trade")
+
+    if requester_trade_usage["count_value"] >= MAX_TRADES_PER_DAY:
+        return await interaction.response.send_message(
+            f"You have reached your daily trade limit of **{MAX_TRADES_PER_DAY}** trades.",
+            ephemeral=True
+        )
+
+    if target_trade_usage["count_value"] >= MAX_TRADES_PER_DAY:
+        return await interaction.response.send_message(
+            f"{user.display_name} has reached their daily trade limit of **{MAX_TRADES_PER_DAY}** trades.",
+            ephemeral=True
+        )
+
     view = TradeView(interaction.user, user, your_card_data, their_card_data)
     embed = discord.Embed(
         title="Trade Request",
@@ -4618,8 +4712,11 @@ async def removedropchannel(interaction: discord.Interaction, channel: discord.T
         f"Removed {channel.mention} from drop channels."
     )
 
-@bot.tree.command(name="listdropchannels", description="View this server's automatic card drop channels.")
+@bot.tree.command(name="listdropchannels", description="Staff only: view this server's automatic card drop channels.")
 async def listdropchannels(interaction: discord.Interaction):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
     channels = await get_drop_channels_db(interaction.guild.id)
     if not channels:
         return await interaction.response.send_message("No drop channels set for this server.")
