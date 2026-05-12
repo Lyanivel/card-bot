@@ -3668,6 +3668,7 @@ async def on_ready():
 
 # ---------------- COMMANDS ----------------
 @bot.tree.command(name="settings", description="Admin only: view and edit bot game settings.")
+@app_commands.default_permissions(administrator=True)
 async def settings(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
@@ -3680,6 +3681,7 @@ async def settings(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="ping", description="Staff only: check if the bot is online.")
+@app_commands.default_permissions(manage_messages=True)
 async def ping(interaction: discord.Interaction):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
@@ -3852,6 +3854,7 @@ async def givecurrency(interaction: discord.Interaction, user: discord.Member, a
     )
 
 @bot.tree.command(name="addbal", description="Staff only: add currency to a user's balance.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
     user="User to add balance to",
     amount="Amount to add"
@@ -4027,6 +4030,7 @@ async def buy(interaction: discord.Interaction, item: str):
 
 
 @bot.tree.command(name="togglestaffsnipe", description="Enable or disable sniping staff members.")
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(enabled="Turn staff sniping on or off")
 @app_commands.checks.has_permissions(administrator=True)
 async def togglestaffsnipe(interaction: discord.Interaction, enabled: bool):
@@ -4324,6 +4328,7 @@ async def trade(
     await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="addcard", description="Staff only: add or reactivate a collectible card.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
     name="Card name",
     rarity="Card rarity",
@@ -4370,6 +4375,7 @@ async def addcard(
     await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `**ID:** `{new_id}``")
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
     rarity="Choose a rarity to drop from",
     card_name="Choose a specific card to drop"
@@ -4419,6 +4425,7 @@ async def dropcard(
     )
 
 @bot.tree.command(name="removecard", description="Staff only: remove a card from future drops.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(card_name="Choose the card to remove")
 @app_commands.autocomplete(card_name=all_active_cards_autocomplete)
 async def removecard(interaction: discord.Interaction, card_name: str):
@@ -4448,6 +4455,7 @@ async def removecard(interaction: discord.Interaction, card_name: str):
 
 
 @bot.tree.command(name="addtitle", description="Staff only: add a preset title to the shop.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
     title="Title text to sell",
     price="Price in Sancs"
@@ -4467,6 +4475,7 @@ async def addtitle(interaction: discord.Interaction, title: str, price: int):
 
 
 @bot.tree.command(name="removetitle", description="Staff only: remove a preset title from the shop.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(title="Title to remove")
 async def removetitle(interaction: discord.Interaction, title: str):
     if not await is_staff_member(interaction):
@@ -4512,6 +4521,7 @@ async def listtitles(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="addprofileemoji", description="Staff only: add a preset profile emoji to the shop.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
     name="Emoji display name",
     emoji="Emoji to sell",
@@ -4532,6 +4542,7 @@ async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: st
 
 
 @bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(name="Profile emoji name to remove")
 async def removeprofileemoji(interaction: discord.Interaction, name: str):
     if not await is_staff_member(interaction):
@@ -4615,6 +4626,7 @@ async def equiptitle(interaction: discord.Interaction, title: str):
 
 
 @bot.tree.command(name="gooslogtest", description="Admin only: test the Goos log channel.")
+@app_commands.default_permissions(administrator=True)
 async def gooslogtest(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message(
@@ -4655,6 +4667,7 @@ async def gooslogtest(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="setgooslogchannel", description="Admin only: set the staff log channel for Goos exchange requests.")
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel where Goos exchange requests should be logged")
 async def setgooslogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not interaction.user.guild_permissions.administrator:
@@ -4680,6 +4693,7 @@ async def setgooslogchannel(interaction: discord.Interaction, channel: discord.T
 
 
 @bot.tree.command(name="setstaffrole", description="Admin only: set the staff role for this server.")
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(role="Role allowed to use staff bot commands")
 async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
     if not interaction.user.guild_permissions.administrator:
@@ -4693,6 +4707,7 @@ async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
     )
 
 @bot.tree.command(name="adddropchannel", description="Staff only: add a channel for automatic card drops.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(channel="Channel where automatic drops can happen")
 async def adddropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not await is_staff_member(interaction):
@@ -4703,6 +4718,7 @@ async def adddropchannel(interaction: discord.Interaction, channel: discord.Text
     )
 
 @bot.tree.command(name="removedropchannel", description="Staff only: remove a channel from automatic card drops.")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(channel="Channel to remove from automatic drops")
 async def removedropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not await is_staff_member(interaction):
@@ -4713,6 +4729,7 @@ async def removedropchannel(interaction: discord.Interaction, channel: discord.T
     )
 
 @bot.tree.command(name="listdropchannels", description="Staff only: view this server's automatic card drop channels.")
+@app_commands.default_permissions(manage_messages=True)
 async def listdropchannels(interaction: discord.Interaction):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
