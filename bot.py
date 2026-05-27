@@ -4809,6 +4809,17 @@ async def profile(interaction: discord.Interaction, user: Optional[discord.Membe
 
 @bot.tree.command(name="givesniper", description="Staff only: give sniper items.")
 @app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(
+    user="User to give snipers to",
+    amount="Amount to give",
+    sniper_type="Choose regular or legendary"
+)
+@app_commands.choices(
+    sniper_type=[
+        app_commands.Choice(name="Regular", value="regular"),
+        app_commands.Choice(name="Legendary", value="legendary"),
+    ]
+)
 async def givesniper(
     interaction: discord.Interaction,
     user: discord.Member,
@@ -4818,10 +4829,7 @@ async def givesniper(
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    sniper_value = "regular"
-
-    if sniper_type:
-        sniper_value = sniper_type.value
+    sniper_value = sniper_type.value if sniper_type else "regular"
 
     await add_snipe_item(user.id, sniper_value, amount)
 
@@ -4832,18 +4840,19 @@ async def givesniper(
     )
 
 
-@givesniper.autocomplete("sniper_type")
-async def givesniper_autocomplete(interaction: discord.Interaction, current: str):
-    return [
-        app_commands.Choice(name="Regular", value="regular"),
-        app_commands.Choice(name="Legendary", value="legendary")
-    ]
-
-
-
-
 @bot.tree.command(name="givecrate", description="Staff only: give loot crates.")
 @app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(
+    user="User to give crates to",
+    amount="Amount to give",
+    crate_type="Choose regular or legendary"
+)
+@app_commands.choices(
+    crate_type=[
+        app_commands.Choice(name="Regular", value="regular"),
+        app_commands.Choice(name="Legendary", value="legendary"),
+    ]
+)
 async def givecrate(
     interaction: discord.Interaction,
     user: discord.Member,
@@ -4853,10 +4862,7 @@ async def givecrate(
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    crate_value = "regular"
-
-    if crate_type:
-        crate_value = crate_type.value
+    crate_value = crate_type.value if crate_type else "regular"
 
     await add_loot_crate(user.id, crate_value, amount)
 
@@ -4865,14 +4871,6 @@ async def givecrate(
     await interaction.response.send_message(
         f"Gave {user.mention} **{amount}x {crate_name}**."
     )
-
-
-@givecrate.autocomplete("crate_type")
-async def givecrate_autocomplete(interaction: discord.Interaction, current: str):
-    return [
-        app_commands.Choice(name="Regular", value="regular"),
-        app_commands.Choice(name="Legendary", value="legendary")
-    ]
 
 
 # ---------------- RUN ----------------
