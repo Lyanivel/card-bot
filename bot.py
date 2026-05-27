@@ -177,6 +177,14 @@ SHOP_ITEMS = {
         "category": "Game Items",
         "snipe_item": "regular"
     },
+
+    "legendarysniper": {
+        "name": "Legendary Sniper",
+        "price": 7500,
+        "description": "A stronger sniper with only 3 bushes to search.",
+        "category": "Game Items",
+        "snipe_item": "legendary"
+    },
     "luckboost": {
         "name": "Luck Boost",
         "price": 2500,
@@ -1624,6 +1632,16 @@ async def add_owned_title(user_id, title):
             VALUES ($1, $2)
             ON CONFLICT DO NOTHING
         """, user_id, title)
+
+
+
+
+async def get_total_cards_owned(user_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT COUNT(*) FROM inventory WHERE user_id=$1",
+            user_id
+        ) or 0
 
 
 async def get_user_owned_titles(user_id):
@@ -4747,6 +4765,115 @@ async def listdropchannels(interaction: discord.Interaction):
         color=discord.Color.from_str("#9e659d")
     )
     await interaction.response.send_message(embed=embed)
+
+
+
+@bot.tree.command(name="profile", description="View your profile.")
+async def profile(interaction: discord.Interaction, user: Optional[discord.Member] = None):
+    target = user or interaction.user
+
+    balance = await get_balance(target.id)
+    title = await get_title(target.id)
+    emoji = await get_user_custom_emoji(target.id)
+    cards_owned = await get_total_cards_owned(target.id)
+
+    name_line = target.display_name
+
+    if emoji:
+        name_line += f" {emoji}"
+
+    if title:
+        name_line += f" — {title}"
+
+    embed = discord.Embed(
+        title=name_line,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    embed.add_field(
+        name="Balance",
+        value=format_coins(balance),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Stats",
+        value=f"• Cards Owned: {cards_owned}",
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+
+
+
+@bot.tree.command(name="givesniper", description="Staff only: give sniper items.")
+@app_commands.default_permissions(manage_messages=True)
+async def givesniper(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    amount: app_commands.Range[int, 1, 100] = 1,
+    sniper_type: app_commands.Choice[str] = None
+):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    sniper_value = "regular"
+
+    if sniper_type:
+        sniper_value = sniper_type.value
+
+    await add_snipe_item(user.id, sniper_value, amount)
+
+    sniper_name = "Legendary Sniper" if sniper_value == "legendary" else "Sniper"
+
+    await interaction.response.send_message(
+        f"Gave {user.mention} **{amount}x {sniper_name}**."
+    )
+
+
+@givesniper.autocomplete("sniper_type")
+async def givesniper_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name="Regular", value="regular"),
+        app_commands.Choice(name="Legendary", value="legendary")
+    ]
+
+
+
+
+@bot.tree.command(name="givecrate", description="Staff only: give loot crates.")
+@app_commands.default_permissions(manage_messages=True)
+async def givecrate(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    amount: app_commands.Range[int, 1, 100] = 1,
+    crate_type: app_commands.Choice[str] = None
+):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    crate_value = "regular"
+
+    if crate_type:
+        crate_value = crate_type.value
+
+    await add_loot_crate(user.id, crate_value, amount)
+
+    crate_name = "Legendary Loot Crate" if crate_value == "legendary" else "Loot Crate"
+
+    await interaction.response.send_message(
+        f"Gave {user.mention} **{amount}x {crate_name}**."
+    )
+
+
+@givecrate.autocomplete("crate_type")
+async def givecrate_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name="Regular", value="regular"),
+        app_commands.Choice(name="Legendary", value="legendary")
+    ]
+
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
