@@ -207,34 +207,6 @@ SHOP_ITEMS = {
         "category": "Cosmetics",
         "profile_emoji_menu": True
     },
-    "goosexchange": {
-        "name": "Sanc to Goos Exchange",
-        "price": 0,
-        "description": "Exchange Sancs for Goos. Choose an amount from the item details.",
-        "category": "Exchange",
-        "exchange_menu": True
-    },
-    "goos100": {
-        "name": "100 Goos Exchange",
-        "price": 7500,
-        "description": "Request 100 Goos. Staff must fulfill this manually.",
-        "category": "Hidden",
-        "goos_amount": 100
-    },
-    "goos250": {
-        "name": "250 Goos Exchange",
-        "price": 18000,
-        "description": "Request 250 Goos. Staff must fulfill this manually.",
-        "category": "Hidden",
-        "goos_amount": 250
-    },
-    "goos500": {
-        "name": "500 Goos Exchange",
-        "price": 35000,
-        "description": "Request 500 Goos. Staff must fulfill this manually.",
-        "category": "Hidden",
-        "goos_amount": 500
-    },
 }
 last_claim_times = {}
 last_auto_drop_times = {}
@@ -424,9 +396,6 @@ async def setup_database():
             );
         """)
 
-        await conn.execute("""
-            ALTER TABLE server_settings
-        """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS drop_channels (
                 guild_id BIGINT NOT NULL,
@@ -881,8 +850,6 @@ def get_shop_item_emoji(item):
         return WHEEL_SPIN_EMOJI
     if "title_text" in item or item.get("title_menu"):
         return TITLE_EMOJI
-    if item.get("exchange_menu") or "goos_amount" in item:
-        return SANC4OOS_EMOJI
     if item.get("profile_emoji_menu"):
         return CUSTOM_EMOJI_SHOP
     if item.get("snipe_item"):
@@ -906,8 +873,6 @@ def get_shop_item_image(item_key):
         return WHEEL_SPIN_IMAGE_URL
     if item_key == "title":
         return TITLE_IMAGE_URL
-    if item_key == "goosexchange" or item_key.startswith("goos"):
-        return SANC4OOS_IMAGE_URL
     if item_key == "profileemoji":
         return CUSTOM_EMOJI_IMAGE_URL
     return ""
