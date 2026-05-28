@@ -452,6 +452,17 @@ async def setup_database():
         """)
 
         await conn.execute("""
+            CREATE TABLE IF NOT EXISTS event_settings (
+                guild_id BIGINT PRIMARY KEY,
+                event_name TEXT DEFAULT 'Untitled Event',
+                event_theme TEXT DEFAULT 'No theme set',
+                event_launched BOOLEAN NOT NULL DEFAULT FALSE,
+                event_mode TEXT DEFAULT 'General Event',
+                event_notes TEXT DEFAULT 'No notes set'
+            );
+        """)
+
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS snipe_items (
                 user_id BIGINT PRIMARY KEY,
                 regular_count INTEGER NOT NULL DEFAULT 0,
@@ -778,6 +789,49 @@ async def set_crate_setting_db(guild_id, column, value: int):
             value,
             guild_id
         )
+
+async def get_event_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT event_name, event_theme, event_launched, event_mode, event_notes FROM event_settings WHERE guild_id=$1",
+            guild_id
+        )
+        if not row:
+            await conn.execute("""
+                INSERT INTO event_settings (guild_id, event_name, event_theme, event_launched, event_mode, event_notes)
+                VALUES ($1, 'Untitled Event', 'No theme set', FALSE, 'General Event', 'No notes set')
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id)
+            return {
+                "event_name": "Untitled Event",
+                "event_theme": "No theme set",
+                "event_launched": False,
+                "event_mode": "General Event",
+                "event_notes": "No notes set"
+            }
+        return dict(row)
+
+async def set_event_setting_db(guild_id, column, value):
+    allowed_columns = {"event_name", "event_theme", "event_launched", "event_mode", "event_notes"}
+    if column not in allowed_columns:
+        raise ValueError("Invalid event setting.")
+    await get_event_settings(guild_id)
+    async with db_pool.acquire() as conn:
+        await conn.execute(f"UPDATE event_settings SET {column}=$1 WHERE guild_id=$2", value, guild_id)
+
+async def reset_event_settings_db(guild_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO event_settings (guild_id, event_name, event_theme, event_launched, event_mode, event_notes)
+            VALUES ($1, 'Untitled Event', 'No theme set', FALSE, 'General Event', 'No notes set')
+            ON CONFLICT (guild_id)
+            DO UPDATE SET
+                event_name='Untitled Event',
+                event_theme='No theme set',
+                event_launched=FALSE,
+                event_mode='General Event',
+                event_notes='No notes set'
+        """, guild_id)
 
 async def is_staff_member(interaction: discord.Interaction):
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
@@ -3744,120 +3798,206 @@ class ResetUserConfirmView(discord.ui.View):
             view=self
         )
 
-def create_eventsetup_home_embed():
+async def create_eventsetup_home_embed(guild_id):
+    settings = await get_event_settings(guild_id)
+    launched_text = f"{TOGGLE_ON_EMOJI} Launched" if settings["event_launched"] else f"{TOGGLE_OFF_EMOJI} Not launched"
+
     embed = discord.Embed(
         title="Event Setup",
-        description="Build and manage special event tools for tournaments, team games, sabotage rounds, and limited-time chaos.",
+        description="Manage event details, themes, modes, and launch status.",
         color=discord.Color.from_str("#9e659d")
     )
+
     embed.add_field(
-        name="Current Event Tools",
+        name="Current Event",
         value=(
-            f"{BULLET_EMOJI} **Custom Cards** — Cards with staff-chosen types\n"
-            f"{BULLET_EMOJI} **Sabotage Ideas** — Planned event/tournament effects\n"
-            f"{BULLET_EMOJI} **Special Boosts** — Planned temporary event perks\n"
-            f"{BULLET_EMOJI} **Event Modes** — Planned tournament settings"
+            f"**Name:** {settings['event_name']}\n"
+            f"**Theme:** {settings['event_theme']}\n"
+            f"**Mode:** {settings['event_mode']}\n"
+            f"**Status:** {launched_text}\n"
+            f"**Notes:** {settings['event_notes']}"
         ),
         inline=False
     )
-    embed.set_footer(text="Choose a category below.")
+
+    embed.add_field(
+        name="Custom Cards",
+        value=(
+            "Use `/addcard` with rarity **Custom** and type whatever custom type you need.\n"
+            "Examples: `Sabotage`, `Team Buff`, `Curse`, `Reward`, `Immunity`, `Trap`"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(text="Use the dropdown or buttons below to edit this event.")
     return embed
 
-def create_eventsetup_detail_embed(category):
-    embed = discord.Embed(
-        title=f"Event Setup — {category}",
-        color=discord.Color.from_str("#9e659d")
-    )
+def create_eventsetup_info_embed(category):
+    embed = discord.Embed(title=f"Event Setup — {category}", color=discord.Color.from_str("#9e659d"))
 
     if category == "Custom Cards":
         embed.description = (
-            "Use `/addcard` and choose **Custom** as the rarity.\n\n"
-            "**Custom card types:**\n"
-            f"{BULLET_EMOJI} Collectible\n"
+            "Custom cards now use a typed custom type instead of a fixed dropdown.\n\n"
+            "**Examples:**\n"
             f"{BULLET_EMOJI} Sabotage\n"
-            f"{BULLET_EMOJI} Immunity\n"
-            f"{BULLET_EMOJI} Boost\n"
+            f"{BULLET_EMOJI} Team Buff\n"
+            f"{BULLET_EMOJI} Curse\n"
+            f"{BULLET_EMOJI} Trap\n"
             f"{BULLET_EMOJI} Reward\n"
-            f"{BULLET_EMOJI} Other\n\n"
-            "Example:\n"
+            f"{BULLET_EMOJI} Immunity\n\n"
             "`/addcard name:Sneak Attack rarity:Custom custom_type:Sabotage image:URL`"
         )
     elif category == "Sabotage Ideas":
         embed.description = (
-            "Sabotage cards are planned future tools for tournaments and team games.\n\n"
             "**Possible sabotage effects:**\n"
             f"{BULLET_EMOJI} Freeze a team\n"
             f"{BULLET_EMOJI} Steal points\n"
             f"{BULLET_EMOJI} Block a reward\n"
             f"{BULLET_EMOJI} Swap scores\n"
             f"{BULLET_EMOJI} Cancel a boost\n\n"
-            "For now, create them as **Custom → Sabotage** cards."
+            "For now, create these as **Custom** cards with a matching custom type."
         )
     elif category == "Special Boosts":
         embed.description = (
-            "Special boosts are planned temporary event perks.\n\n"
-            "**Possible boost ideas:**\n"
+            "**Possible event perks:**\n"
             f"{BULLET_EMOJI} Double Sancs\n"
             f"{BULLET_EMOJI} Better crate odds\n"
             f"{BULLET_EMOJI} Faster drops\n"
             f"{BULLET_EMOJI} Bonus card drops\n"
             f"{BULLET_EMOJI} Team reward multipliers\n\n"
-            "For now, create them as **Custom → Boost** cards."
+            "For now, create these as **Custom** cards with type `Boost` or whatever name fits."
         )
     elif category == "Event Modes":
         embed.description = (
-            "Event modes are planned server-wide tournament settings.\n\n"
             "**Possible modes:**\n"
             f"{BULLET_EMOJI} Tournament Week\n"
             f"{BULLET_EMOJI} Team Games\n"
             f"{BULLET_EMOJI} Sabotage Round\n"
             f"{BULLET_EMOJI} Limited Card Hunt\n"
-            f"{BULLET_EMOJI} Boosted Drop Weekend\n\n"
-            "These can become real toggles later once you decide how events should work."
+            f"{BULLET_EMOJI} Boosted Drop Weekend"
         )
     else:
         embed.description = "Choose a valid event category."
 
     return embed
 
+class EventTextModal(discord.ui.Modal):
+    def __init__(self, setting_key, title, label, placeholder, max_length=100):
+        super().__init__(title=title)
+        self.setting_key = setting_key
+        self.input_value = discord.ui.TextInput(label=label, placeholder=placeholder, min_length=1, max_length=max_length)
+        self.add_item(self.input_value)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit event setup.", ephemeral=True)
+
+        value = str(self.input_value).strip()
+        await set_event_setting_db(interaction.guild.id, self.setting_key, value)
+
+        await send_staff_log(
+            interaction.guild,
+            "Event Setting Updated",
+            f"**Setting:** {self.setting_key}\n**New value:** {value}\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
+
+        await interaction.response.edit_message(
+            embed=await create_eventsetup_home_embed(interaction.guild.id),
+            view=EventSetupView()
+        )
+
 class EventSetupSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Custom Cards", value="Custom Cards", description="How to create flexible event/custom cards"),
-            discord.SelectOption(label="Sabotage Ideas", value="Sabotage Ideas", description="Ideas for future sabotage cards"),
-            discord.SelectOption(label="Special Boosts", value="Special Boosts", description="Ideas for future event boosts"),
-            discord.SelectOption(label="Event Modes", value="Event Modes", description="Ideas for future tournament modes"),
+            discord.SelectOption(label="Set Event Name", value="set_name", description="Change the event name"),
+            discord.SelectOption(label="Set Event Theme", value="set_theme", description="Change the event theme"),
+            discord.SelectOption(label="Set Event Mode", value="set_mode", description="Change the event mode"),
+            discord.SelectOption(label="Set Event Notes", value="set_notes", description="Add short notes for staff"),
+            discord.SelectOption(label="Custom Cards Info", value="Custom Cards", description="How custom event cards work"),
+            discord.SelectOption(label="Sabotage Ideas", value="Sabotage Ideas", description="Ideas for sabotage cards"),
+            discord.SelectOption(label="Special Boosts", value="Special Boosts", description="Ideas for event boosts"),
+            discord.SelectOption(label="Event Modes Info", value="Event Modes", description="Ideas for tournament modes"),
         ]
-        super().__init__(
-            placeholder="Choose an event setup category...",
-            min_values=1,
-            max_values=1,
-            options=options
-        )
+        super().__init__(placeholder="Choose an event setup option...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("Only administrators can use event setup.", ephemeral=True)
 
-        await interaction.response.edit_message(
-            embed=create_eventsetup_detail_embed(self.values[0]),
-            view=EventSetupView()
-        )
+        choice = self.values[0]
+
+        if choice == "set_name":
+            return await interaction.response.send_modal(EventTextModal("event_name", "Set Event Name", "Event name", "Example: Sanction Showdown", 80))
+        if choice == "set_theme":
+            return await interaction.response.send_modal(EventTextModal("event_theme", "Set Event Theme", "Event theme", "Example: Mafia Night / Disney Chaos", 120))
+        if choice == "set_mode":
+            return await interaction.response.send_modal(EventTextModal("event_mode", "Set Event Mode", "Event mode", "Example: Tournament Week", 80))
+        if choice == "set_notes":
+            return await interaction.response.send_modal(EventTextModal("event_notes", "Set Event Notes", "Event notes", "Example: Sabotage cards allowed round 2", 200))
+
+        await interaction.response.edit_message(embed=create_eventsetup_info_embed(choice), view=EventSetupView())
 
 class EventSetupView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
         self.add_item(EventSetupSelect())
 
-    @discord.ui.button(label="Home", style=discord.ButtonStyle.secondary)
-    async def home(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Launch Event", style=discord.ButtonStyle.success)
+    async def launch_event(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
-            return await interaction.response.send_message("Only administrators can use event setup.", ephemeral=True)
+            return await interaction.response.send_message("Only administrators can launch events.", ephemeral=True)
 
-        await interaction.response.edit_message(
-            embed=create_eventsetup_home_embed(),
-            view=EventSetupView()
+        await set_event_setting_db(interaction.guild.id, "event_launched", True)
+        settings = await get_event_settings(interaction.guild.id)
+
+        await send_staff_log(
+            interaction.guild,
+            "Event Launched",
+            f"**Name:** {settings['event_name']}\n**Theme:** {settings['event_theme']}\n**Mode:** {settings['event_mode']}\n**Launched by:** {interaction.user.mention}",
+            discord.Color.green()
         )
+
+        await interaction.response.edit_message(embed=await create_eventsetup_home_embed(interaction.guild.id), view=EventSetupView())
+
+    @discord.ui.button(label="Close Event", style=discord.ButtonStyle.secondary)
+    async def close_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can close events.", ephemeral=True)
+
+        await set_event_setting_db(interaction.guild.id, "event_launched", False)
+
+        await send_staff_log(
+            interaction.guild,
+            "Event Closed",
+            f"**Closed by:** {interaction.user.mention}",
+            discord.Color.orange()
+        )
+
+        await interaction.response.edit_message(embed=await create_eventsetup_home_embed(interaction.guild.id), view=EventSetupView())
+
+    @discord.ui.button(label="Reset Event", style=discord.ButtonStyle.danger)
+    async def reset_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can reset events.", ephemeral=True)
+
+        await reset_event_settings_db(interaction.guild.id)
+
+        await send_staff_log(
+            interaction.guild,
+            "Event Reset",
+            f"**Reset by:** {interaction.user.mention}\nThis did not delete member inventories, cards, balances, or rewards.",
+            discord.Color.red()
+        )
+
+        await interaction.response.edit_message(embed=await create_eventsetup_home_embed(interaction.guild.id), view=EventSetupView())
+
+    @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary)
+    async def refresh_event(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can refresh event setup.", ephemeral=True)
+
+        await interaction.response.edit_message(embed=await create_eventsetup_home_embed(interaction.guild.id), view=EventSetupView())
 
 # ---------------- BOT ----------------
 class Bot(discord.Client):
@@ -4617,14 +4757,6 @@ async def trade(
         app_commands.Choice(name="Epic", value="Epic"),
         app_commands.Choice(name="Legendary", value="Legendary"),
         app_commands.Choice(name="Custom", value="Custom"),
-    ],
-    custom_type=[
-        app_commands.Choice(name="Collectible", value="Collectible"),
-        app_commands.Choice(name="Sabotage", value="Sabotage"),
-        app_commands.Choice(name="Immunity", value="Immunity"),
-        app_commands.Choice(name="Boost", value="Boost"),
-        app_commands.Choice(name="Reward", value="Reward"),
-        app_commands.Choice(name="Other", value="Other"),
     ]
 )
 async def addcard(
@@ -4632,15 +4764,18 @@ async def addcard(
     name: str,
     rarity: app_commands.Choice[str],
     image: str,
-    custom_type: Optional[app_commands.Choice[str]] = None
+    custom_type: Optional[str] = None
 ):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    selected_custom_type = custom_type.value if custom_type else None
+    selected_custom_type = custom_type.strip() if custom_type else None
 
     if rarity.value == "Custom" and not selected_custom_type:
         selected_custom_type = "Collectible"
+
+    if selected_custom_type and len(selected_custom_type) > 40:
+        return await interaction.response.send_message("Custom type must be 40 characters or less.", ephemeral=True)
 
     if rarity.value != "Custom":
         selected_custom_type = None
@@ -5233,6 +5368,7 @@ async def botstatus(interaction: discord.Interaction):
     economy_settings = await get_economy_settings(interaction.guild.id)
     crate_settings = await get_crate_settings(interaction.guild.id)
     snipe_settings = await get_snipe_settings(interaction.guild.id)
+    event_settings = await get_event_settings(interaction.guild.id)
     drop_channels = await get_drop_channels_db(interaction.guild.id)
     staff_role_id = await get_staff_role(interaction.guild.id)
     staff_log_channel_id = await get_staff_log_channel(interaction.guild.id)
@@ -5273,6 +5409,17 @@ async def botstatus(interaction: discord.Interaction):
         value=(
             f"**Daily:** {int(economy_settings['daily_min']):,} - {int(economy_settings['daily_max']):,} Sancs\n"
             f"**Weekly:** {int(economy_settings['weekly_min']):,} - {int(economy_settings['weekly_max']):,} Sancs"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Event",
+        value=(
+            f"**Name:** {event_settings['event_name']}\n"
+            f"**Theme:** {event_settings['event_theme']}\n"
+            f"**Mode:** {event_settings['event_mode']}\n"
+            f"**Launched:** {format_on_off(event_settings['event_launched'])}"
         ),
         inline=False
     )
@@ -5329,7 +5476,7 @@ async def eventsetup(interaction: discord.Interaction):
         return await interaction.response.send_message("Only administrators can use event setup.", ephemeral=True)
 
     await interaction.response.send_message(
-        embed=create_eventsetup_home_embed(),
+        embed=await create_eventsetup_home_embed(interaction.guild.id),
         view=EventSetupView(),
         ephemeral=True
     )
