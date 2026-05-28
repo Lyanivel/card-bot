@@ -229,6 +229,10 @@ async def setup_database():
             ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
         """)
         await conn.execute("""
+            ALTER TABLE cards
+            ADD COLUMN IF NOT EXISTS custom_type TEXT;
+        """)
+        await conn.execute("""
             UPDATE cards
             SET is_active = TRUE
             WHERE is_active IS NULL;
@@ -869,6 +873,7 @@ def get_color(rarity):
         "Rare": discord.Color.from_str("#5c8df6"),
         "Epic": discord.Color.from_str("#9e659d"),
         "Legendary": discord.Color.from_str("#f5c542"),
+        "Custom": discord.Color.from_str("#ff2ea6"),
     }.get(rarity, discord.Color.blurple())
 
 def format_coins(amount: int):
@@ -1147,15 +1152,37 @@ def format_card_line(card, amount=None, limited_note=""):
     amount_text = f" x{amount}" if amount is not None else ""
     return f"**ID:** `{card['id']}` {card['name']} ({card['rarity']}){amount_text}{limited_note}"
 
+def get_record_value(record, key, default=None):
+    try:
+        if key in record:
+            return record[key]
+    except Exception:
+        pass
+    return default
+
+def format_card_type(card):
+    rarity = get_record_value(card, "rarity", "Unknown")
+    custom_type = get_record_value(card, "custom_type")
+    if rarity == "Custom" and custom_type:
+        return f"Custom • {custom_type}"
+    return rarity
+
 def clean_card_ref(card_ref: str):
     return card_ref.strip().replace("#", "").replace("ID", "").replace("id", "").strip()
 
 def create_card_embed(card):
+    card_type = format_card_type(card)
+
     embed = discord.Embed(
-        title=f"{card['rarity']} Card Drop!",
+        title=f"{card_type} Card Drop!",
         description=f"**{card['name']}** appeared!\n**ID:** `{card['id']}`",
         color=get_color(card["rarity"])
     )
+
+    custom_type = get_record_value(card, "custom_type")
+    if card["rarity"] == "Custom" and custom_type:
+        embed.add_field(name="Type", value=custom_type, inline=True)
+
     embed.set_image(url=card["image"])
     return embed
 
@@ -2268,7 +2295,7 @@ class RemoveCardView(discord.ui.View):
         await send_staff_log(
             interaction.guild,
             "Card Removed From Drops",
-            f"**Card:** {self.card['name']}\n**ID:** `{self.card['id']}`\n**Rarity:** {self.card['rarity']}\n**Removed by:** {interaction.user.mention}",
+            f"**Card:** {self.card['name']}\n**ID:** `{self.card['id']}`\n**Rarity:** {self.card['rarity']}\n**Custom Type:** {get_record_value(self.card, 'custom_type') or 'None'}\n**Removed by:** {interaction.user.mention}",
             discord.Color.red()
         )
 
@@ -3717,6 +3744,121 @@ class ResetUserConfirmView(discord.ui.View):
             view=self
         )
 
+def create_eventsetup_home_embed():
+    embed = discord.Embed(
+        title="Event Setup",
+        description="Build and manage special event tools for tournaments, team games, sabotage rounds, and limited-time chaos.",
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.add_field(
+        name="Current Event Tools",
+        value=(
+            f"{BULLET_EMOJI} **Custom Cards** — Cards with staff-chosen types\n"
+            f"{BULLET_EMOJI} **Sabotage Ideas** — Planned event/tournament effects\n"
+            f"{BULLET_EMOJI} **Special Boosts** — Planned temporary event perks\n"
+            f"{BULLET_EMOJI} **Event Modes** — Planned tournament settings"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="Choose a category below.")
+    return embed
+
+def create_eventsetup_detail_embed(category):
+    embed = discord.Embed(
+        title=f"Event Setup — {category}",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    if category == "Custom Cards":
+        embed.description = (
+            "Use `/addcard` and choose **Custom** as the rarity.\n\n"
+            "**Custom card types:**\n"
+            f"{BULLET_EMOJI} Collectible\n"
+            f"{BULLET_EMOJI} Sabotage\n"
+            f"{BULLET_EMOJI} Immunity\n"
+            f"{BULLET_EMOJI} Boost\n"
+            f"{BULLET_EMOJI} Reward\n"
+            f"{BULLET_EMOJI} Other\n\n"
+            "Example:\n"
+            "`/addcard name:Sneak Attack rarity:Custom custom_type:Sabotage image:URL`"
+        )
+    elif category == "Sabotage Ideas":
+        embed.description = (
+            "Sabotage cards are planned future tools for tournaments and team games.\n\n"
+            "**Possible sabotage effects:**\n"
+            f"{BULLET_EMOJI} Freeze a team\n"
+            f"{BULLET_EMOJI} Steal points\n"
+            f"{BULLET_EMOJI} Block a reward\n"
+            f"{BULLET_EMOJI} Swap scores\n"
+            f"{BULLET_EMOJI} Cancel a boost\n\n"
+            "For now, create them as **Custom → Sabotage** cards."
+        )
+    elif category == "Special Boosts":
+        embed.description = (
+            "Special boosts are planned temporary event perks.\n\n"
+            "**Possible boost ideas:**\n"
+            f"{BULLET_EMOJI} Double Sancs\n"
+            f"{BULLET_EMOJI} Better crate odds\n"
+            f"{BULLET_EMOJI} Faster drops\n"
+            f"{BULLET_EMOJI} Bonus card drops\n"
+            f"{BULLET_EMOJI} Team reward multipliers\n\n"
+            "For now, create them as **Custom → Boost** cards."
+        )
+    elif category == "Event Modes":
+        embed.description = (
+            "Event modes are planned server-wide tournament settings.\n\n"
+            "**Possible modes:**\n"
+            f"{BULLET_EMOJI} Tournament Week\n"
+            f"{BULLET_EMOJI} Team Games\n"
+            f"{BULLET_EMOJI} Sabotage Round\n"
+            f"{BULLET_EMOJI} Limited Card Hunt\n"
+            f"{BULLET_EMOJI} Boosted Drop Weekend\n\n"
+            "These can become real toggles later once you decide how events should work."
+        )
+    else:
+        embed.description = "Choose a valid event category."
+
+    return embed
+
+class EventSetupSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Custom Cards", value="Custom Cards", description="How to create flexible event/custom cards"),
+            discord.SelectOption(label="Sabotage Ideas", value="Sabotage Ideas", description="Ideas for future sabotage cards"),
+            discord.SelectOption(label="Special Boosts", value="Special Boosts", description="Ideas for future event boosts"),
+            discord.SelectOption(label="Event Modes", value="Event Modes", description="Ideas for future tournament modes"),
+        ]
+        super().__init__(
+            placeholder="Choose an event setup category...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use event setup.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=create_eventsetup_detail_embed(self.values[0]),
+            view=EventSetupView()
+        )
+
+class EventSetupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(EventSetupSelect())
+
+    @discord.ui.button(label="Home", style=discord.ButtonStyle.secondary)
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can use event setup.", ephemeral=True)
+
+        await interaction.response.edit_message(
+            embed=create_eventsetup_home_embed(),
+            view=EventSetupView()
+        )
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -4294,11 +4436,15 @@ async def viewcard(interaction: discord.Interaction, card: str):
     if not c:
         return await interaction.response.send_message("Not found.", ephemeral=True)
     active_text = "Currently obtainable" if c["is_active"] else "Unobtainable / limited"
+    custom_type = get_record_value(c, "custom_type")
+    custom_type_text = f"\n**Type:** {custom_type}" if c["rarity"] == "Custom" and custom_type else ""
+
     embed = discord.Embed(
         title=c["name"],
         description=(
             f"**ID:** {c['id']}\n"
-            f"**Rarity:** {c['rarity']}\n"
+            f"**Rarity:** {c['rarity']}"
+            f"{custom_type_text}\n"
             f"**Status:** {active_text}"
         ),
         color=get_color(c["rarity"])
@@ -4315,11 +4461,12 @@ async def cards(interaction: discord.Interaction):
     for c in all_cards:
         grouped.setdefault(c["rarity"], []).append(c)
     text = ""
-    for rarity in ["Common", "Rare", "Epic", "Legendary"]:
+    for rarity in ["Common", "Rare", "Epic", "Legendary", "Custom"]:
         if rarity in grouped:
             text += f"**{rarity}**\n"
             for card in grouped[rarity]:
-                text += f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({card['rarity']})\n"
+                custom_type_text = f" • {get_record_value(card, 'custom_type')}" if card["rarity"] == "Custom" and get_record_value(card, "custom_type") else ""
+                text += f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({card['rarity']}{custom_type_text})\n"
             text += "\n"
     embed = discord.Embed(
         title="Currently Obtainable Cards",
@@ -4342,11 +4489,11 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     emoji_text = f" {custom_emoji}" if custom_emoji else ""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT cards.id, cards.name, cards.rarity, cards.is_active, COUNT(*) as amount
+            SELECT cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active, COUNT(*) as amount
             FROM inventory
             JOIN cards ON cards.id = inventory.card_id
             WHERE user_id=$1
-            GROUP BY cards.id, cards.name, cards.rarity, cards.is_active
+            GROUP BY cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active
             ORDER BY cards.rarity, cards.id
         """, user.id)
     text = f"**Balance:** {format_coins(bal)}\n"
@@ -4377,7 +4524,8 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     else:
         for r in rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            text += f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({r['rarity']}) x{r['amount']}{limited_note}\n"
+            custom_type_text = f" • {get_record_value(r, 'custom_type')}" if r["rarity"] == "Custom" and get_record_value(r, "custom_type") else ""
+            text += f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({r['rarity']}{custom_type_text}) x{r['amount']}{limited_note}\n"
     inventory_title = f"{title} {user.display_name}{emoji_text}'s Inventory" if title else f"{user.display_name}{emoji_text}'s Inventory"
     embed = discord.Embed(
         title=inventory_title,
@@ -4459,7 +4607,8 @@ async def trade(
 @app_commands.describe(
     name="Card name",
     rarity="Card rarity",
-    image="Direct image URL"
+    image="Direct image URL",
+    custom_type="Only needed for Custom cards"
 )
 @app_commands.choices(
     rarity=[
@@ -4467,37 +4616,58 @@ async def trade(
         app_commands.Choice(name="Rare", value="Rare"),
         app_commands.Choice(name="Epic", value="Epic"),
         app_commands.Choice(name="Legendary", value="Legendary"),
+        app_commands.Choice(name="Custom", value="Custom"),
+    ],
+    custom_type=[
+        app_commands.Choice(name="Collectible", value="Collectible"),
+        app_commands.Choice(name="Sabotage", value="Sabotage"),
+        app_commands.Choice(name="Immunity", value="Immunity"),
+        app_commands.Choice(name="Boost", value="Boost"),
+        app_commands.Choice(name="Reward", value="Reward"),
+        app_commands.Choice(name="Other", value="Other"),
     ]
 )
 async def addcard(
     interaction: discord.Interaction,
     name: str,
     rarity: app_commands.Choice[str],
-    image: str
+    image: str,
+    custom_type: Optional[app_commands.Choice[str]] = None
 ):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    selected_custom_type = custom_type.value if custom_type else None
+
+    if rarity.value == "Custom" and not selected_custom_type:
+        selected_custom_type = "Collectible"
+
+    if rarity.value != "Custom":
+        selected_custom_type = None
+
     existing_card = await get_card_by_name(name)
     async with db_pool.acquire() as conn:
         if existing_card:
             await conn.execute(
                 """
                 UPDATE cards
-                SET rarity=$1, image=$2, is_active = TRUE
-                WHERE id=$3
+                SET rarity=$1, image=$2, is_active = TRUE, custom_type=$3
+                WHERE id=$4
                 """,
                 rarity.value,
                 image,
+                selected_custom_type,
                 existing_card["id"]
             )
             return await interaction.response.send_message(
                 f"Reactivated/updated **{name}** as a **{rarity.value}** card. `**ID:** `{existing_card['id']}``"
             )
         new_id = await conn.fetchval(
-            "INSERT INTO cards (name, rarity, image, is_active) VALUES ($1,$2,$3, TRUE) RETURNING id",
+            "INSERT INTO cards (name, rarity, image, is_active, custom_type) VALUES ($1,$2,$3, TRUE, $4) RETURNING id",
             name,
             rarity.value,
-            image
+            image,
+            selected_custom_type
         )
     await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `**ID:** `{new_id}``")
 
@@ -4513,6 +4683,7 @@ async def addcard(
         app_commands.Choice(name="Rare", value="Rare"),
         app_commands.Choice(name="Epic", value="Epic"),
         app_commands.Choice(name="Legendary", value="Legendary"),
+        app_commands.Choice(name="Custom", value="Custom"),
     ]
 )
 @app_commands.autocomplete(card_name=all_active_cards_autocomplete)
@@ -4549,7 +4720,7 @@ async def dropcard(
     await send_staff_log(
         interaction.guild,
         "Manual Card Drop",
-        f"**Card:** {selected_card['name']}\n**ID:** `{selected_card['id']}`\n**Rarity:** {selected_card['rarity']}\n**Dropped by:** {interaction.user.mention}",
+        f"**Card:** {selected_card['name']}\n**ID:** `{selected_card['id']}`\n**Rarity:** {selected_card['rarity']}\n**Custom Type:** {get_record_value(selected_card, 'custom_type') or 'None'}\n**Dropped by:** {interaction.user.mention}",
         discord.Color.from_str("#9e659d")
     )
 
@@ -5018,7 +5189,7 @@ async def staffhelp(interaction: discord.Interaction):
     embed.add_field(
         name="Admin / Setup",
         value=(
-            "`/settings` — Open Sanction Settings\n`/botstatus` — View current bot setup\n`/setstafflogchannel` — Set the staff log channel\n`/resetuser` — Reset one user\n"
+            "`/settings` — Open Sanction Settings\n`/eventsetup` — Open event setup tools\n`/botstatus` — View current bot setup\n`/setstafflogchannel` — Set the staff log channel\n`/resetuser` — Reset one user\n"
             "`/setstaffrole` — Set the staff command role\n"
             "`/togglestaffsnipe` — Toggle staff sniping\n"
             "`/ping` — Check if the bot is online"
@@ -5148,6 +5319,18 @@ async def resetuser(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(
         embed=embed,
         view=ResetUserConfirmView(interaction.user, user),
+        ephemeral=True
+    )
+
+@bot.tree.command(name="eventsetup", description="Admin only: open the event setup panel.")
+@app_commands.default_permissions(administrator=True)
+async def eventsetup(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use event setup.", ephemeral=True)
+
+    await interaction.response.send_message(
+        embed=create_eventsetup_home_embed(),
+        view=EventSetupView(),
         ephemeral=True
     )
 
