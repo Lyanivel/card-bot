@@ -426,7 +426,6 @@ async def setup_database():
 
         await conn.execute("""
             ALTER TABLE server_settings
-            ADD COLUMN IF NOT EXISTS goos_log_channel_id BIGINT;
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS drop_channels (
@@ -519,20 +518,15 @@ async def set_staff_role_db(guild_id, role_id):
             DO UPDATE SET staff_role_id=$2
         """, guild_id, role_id)
 
-async def get_goos_log_channel(guild_id):
     async with db_pool.acquire() as conn:
         return await conn.fetchval(
-            "SELECT goos_log_channel_id FROM server_settings WHERE guild_id=$1",
             guild_id
         )
 
-async def set_goos_log_channel_db(guild_id, channel_id):
     async with db_pool.acquire() as conn:
         await conn.execute("""
-            INSERT INTO server_settings (guild_id, goos_log_channel_id)
             VALUES ($1, $2)
             ON CONFLICT (guild_id)
-            DO UPDATE SET goos_log_channel_id=$2
         """, guild_id, channel_id)
 
 async def add_drop_channel_db(guild_id, channel_id):
@@ -805,8 +799,6 @@ def create_goos_log_embed_from_values(buyer_id, goos_amount, sancs_cost, claimed
 async def send_goos_log(interaction: discord.Interaction, request_id, shop_item):
     if not interaction.guild:
         return False
-
-    channel_id = await get_goos_log_channel(interaction.guild.id)
 
     if not channel_id:
         print("No Goos log channel is set for this server.")
@@ -2460,8 +2452,6 @@ async def send_custom_emoji_log(interaction: discord.Interaction, request_id, em
     if not interaction.guild:
         return False
 
-    channel_id = await get_goos_log_channel(interaction.guild.id)
-
     if not channel_id:
         print("No staff log channel is set for custom emoji requests.")
         return False
@@ -3141,7 +3131,6 @@ async def create_cosmetic_settings_embed(guild_id):
 
 async def create_staff_settings_embed(guild_id):
     staff_role_id = await get_staff_role(guild_id)
-    goos_channel_id = await get_goos_log_channel(guild_id)
 
     staff_role_text = f"<@&{staff_role_id}>" if staff_role_id else "`Not Set`"
     goos_channel_text = f"<#{goos_channel_id}>" if goos_channel_id else "`Not Set`"
@@ -4630,7 +4619,7 @@ async def givecrate(
 async def help_command(interaction: discord.Interaction):
     embed = discord.Embed(
         title="Sanction Bot Help",
-        description="Here are the main commands members can use.",
+        description="Here’s everything you need to survive.",
         color=discord.Color.from_str("#9e659d")
     )
 
@@ -4677,8 +4666,6 @@ async def help_command(interaction: discord.Interaction):
         value="`/snipe` — Use a sniper against another member",
         inline=False
     )
-
-    embed.set_footer(text="Staff can use /staffhelp for staff-only commands.")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -4740,8 +4727,6 @@ async def staffhelp(interaction: discord.Interaction):
         value=(
             "`/settings` — Open Sanction Settings\n"
             "`/setstaffrole` — Set the staff command role\n"
-            "`/setgooslogchannel` — Set the staff log channel\n"
-            "`/gooslogtest` — Test the log channel\n"
             "`/togglestaffsnipe` — Toggle staff sniping\n"
             "`/ping` — Check if the bot is online"
         ),
