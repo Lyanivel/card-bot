@@ -397,6 +397,11 @@ async def setup_database():
         """)
 
         await conn.execute("""
+            ALTER TABLE server_settings
+            ADD COLUMN IF NOT EXISTS staff_log_channel_id BIGINT;
+        """)
+
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS drop_channels (
                 guild_id BIGINT NOT NULL,
                 channel_id BIGINT NOT NULL,
@@ -486,6 +491,54 @@ async def set_staff_role_db(guild_id, role_id):
             ON CONFLICT (guild_id)
             DO UPDATE SET staff_role_id=$2
         """, guild_id, role_id)
+
+async def get_staff_log_channel(guild_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT staff_log_channel_id FROM server_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+async def set_staff_log_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO server_settings (guild_id, staff_log_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET staff_log_channel_id=$2
+        """, guild_id, channel_id)
+
+async def send_staff_log(guild, title, description, color=None):
+    if not guild:
+        return False
+
+    channel_id = await get_staff_log_channel(guild.id)
+
+    if not channel_id:
+        return False
+
+    channel = guild.get_channel(channel_id) or bot.get_channel(channel_id)
+
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception as e:
+            print(f"Could not fetch staff log channel {channel_id}: {e}")
+            return False
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color or discord.Color.from_str("#9e659d")
+    )
+    embed.timestamp = discord.utils.utcnow()
+
+    try:
+        await channel.send(embed=embed)
+        return True
+    except Exception as e:
+        print(f"Could not send staff log: {e}")
+        return False
 
     async with db_pool.acquire() as conn:
         return await conn.fetchval(
@@ -1441,6 +1494,36 @@ async def get_active_boost(user_id, boost_type):
             return None
         return expires_at
 
+async def get_active_boosts(user_id):
+    now = int(time.time())
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT boost_type, expires_at FROM user_boosts WHERE user_id=$1 AND expires_at>$2 ORDER BY expires_at",
+            user_id,
+            now
+        )
+
+    return rows
+
+def format_active_boosts(rows):
+    if not rows:
+        return "None active"
+
+    names = {
+        "daily": f"{DAILY_BOOST_EMOJI} Daily Boost",
+        "weekly": f"{WEEKLY_BOOST_EMOJI} Weekly Boost",
+        "luck": f"{LUCK_BOOST_EMOJI} Luck Boost",
+    }
+
+    lines = []
+
+    for row in rows:
+        boost_name = names.get(row["boost_type"], row["boost_type"].title())
+        lines.append(f"{BULLET_EMOJI} **{boost_name}** until <t:{int(row['expires_at'])}:R>")
+
+    return "\n".join(lines)
+
 async def set_boost(user_id, boost_type, duration_seconds):
     expires_at = int(time.time()) + duration_seconds
     async with db_pool.acquire() as conn:
@@ -2181,6 +2264,14 @@ class RemoveCardView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await log_removed_card(interaction, self.card)
+
+        await send_staff_log(
+            interaction.guild,
+            "Card Removed From Drops",
+            f"**Card:** {self.card['name']}\n**ID:** `{self.card['id']}`\n**Rarity:** {self.card['rarity']}\n**Removed by:** {interaction.user.mention}",
+            discord.Color.red()
+        )
+
         await interaction.response.edit_message(
             content=(
                 f"**{self.card['name']}** **ID:** `{self.card['id']}` has been removed from future drops and card lists.\n"
@@ -2863,6 +2954,13 @@ class EconomyNumberModal(discord.ui.Modal):
 
         await set_economy_setting_db(interaction.guild.id, self.setting_key, value)
 
+        await send_staff_log(
+            interaction.guild,
+            "Economy Setting Updated",
+            f"**Setting:** {self.setting_key}\n**New value:** {value:,}\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
+
         settings = await get_economy_settings(interaction.guild.id)
 
         if int(settings["daily_min"]) > int(settings["daily_max"]):
@@ -2996,6 +3094,13 @@ class CrateNumberModal(discord.ui.Modal):
             )
 
         await set_crate_setting_db(interaction.guild.id, self.setting_key, value)
+
+        await send_staff_log(
+            interaction.guild,
+            "Crate Setting Updated",
+            f"**Setting:** {self.setting_key}\n**New value:** {value:,}\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
 
         settings = await get_crate_settings(interaction.guild.id)
 
@@ -3141,6 +3246,13 @@ class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
 
         await set_snipe_cooldown_db(interaction.guild.id, minutes)
 
+        await send_staff_log(
+            interaction.guild,
+            "Settings Updated: Snipe Cooldown",
+            f"**New value:** {minutes} minutes\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
+
         await interaction.response.edit_message(
             embed=await create_snipe_settings_embed(interaction.guild.id),
             view=SnipeSettingsView()
@@ -3164,6 +3276,13 @@ class SnipeMuteModal(discord.ui.Modal, title="Set Snipe Mute Time"):
             return await interaction.response.send_message("Mute time must be between 1 and 60 minutes.", ephemeral=True)
 
         await set_snipe_mute_minutes_db(interaction.guild.id, minutes)
+
+        await send_staff_log(
+            interaction.guild,
+            "Settings Updated: Snipe Mute Time",
+            f"**New value:** {minutes} minutes\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
 
         await interaction.response.edit_message(
             embed=await create_snipe_settings_embed(interaction.guild.id),
@@ -3189,6 +3308,13 @@ class AutoDropIntervalModal(discord.ui.Modal, title="Set Auto Drop Interval"):
 
         await set_auto_drop_minutes_db(interaction.guild.id, minutes)
 
+        await send_staff_log(
+            interaction.guild,
+            "Settings Updated: Auto Drop Interval",
+            f"**New value:** {minutes} minutes\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
+
         await interaction.response.edit_message(
             embed=await create_drop_settings_embed(interaction.guild.id),
             view=DropSettingsView()
@@ -3213,6 +3339,13 @@ class AutoDropChanceModal(discord.ui.Modal, title="Set Auto Drop Chance"):
 
         await set_auto_drop_chance_db(interaction.guild.id, chance)
 
+        await send_staff_log(
+            interaction.guild,
+            "Settings Updated: Auto Drop Chance",
+            f"**New value:** {chance}%\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
+
         await interaction.response.edit_message(
             embed=await create_drop_settings_embed(interaction.guild.id),
             view=DropSettingsView()
@@ -3236,6 +3369,13 @@ class ClaimCooldownModal(discord.ui.Modal, title="Set Claim Cooldown"):
             return await interaction.response.send_message("Claim cooldown must be between 0 and 3600 seconds.", ephemeral=True)
 
         await set_claim_cooldown_db(interaction.guild.id, seconds)
+
+        await send_staff_log(
+            interaction.guild,
+            "Settings Updated: Claim Cooldown",
+            f"**New value:** {seconds} seconds\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
 
         await interaction.response.edit_message(
             embed=await create_drop_settings_embed(interaction.guild.id),
@@ -3268,6 +3408,13 @@ class DropSettingsSelect(discord.ui.Select):
             settings = await get_drop_settings(interaction.guild.id)
             new_value = not settings["auto_drop_enabled"]
             await set_auto_drop_enabled_db(interaction.guild.id, new_value)
+
+            await send_staff_log(
+                interaction.guild,
+                "Settings Updated: Auto Drops",
+                f"**New value:** {'Enabled' if new_value else 'Disabled'}\n**Updated by:** {interaction.user.mention}",
+                discord.Color.from_str("#9e659d")
+            )
 
             return await interaction.response.edit_message(
                 embed=await create_drop_settings_embed(interaction.guild.id),
@@ -3463,6 +3610,13 @@ class SnipeSettingsSelect(discord.ui.Select):
             new_value = not settings["staff_snipe_enabled"]
             await set_staff_snipe_enabled(interaction.guild.id, new_value)
 
+            await send_staff_log(
+                interaction.guild,
+                "Settings Updated: Staff Sniping",
+                f"**New value:** {'Enabled' if new_value else 'Disabled'}\n**Updated by:** {interaction.user.mention}",
+                discord.Color.from_str("#9e659d")
+            )
+
             return await interaction.response.edit_message(
                 embed=await create_snipe_settings_embed(interaction.guild.id),
                 view=SnipeSettingsView()
@@ -3499,6 +3653,70 @@ class SnipeSettingsView(discord.ui.View):
             view=SnipeSettingsView()
         )
 
+class ResetUserConfirmView(discord.ui.View):
+    def __init__(self, requester, target):
+        super().__init__(timeout=60)
+        self.requester = requester
+        self.target = target
+        self.finished = False
+
+    @discord.ui.button(label="Confirm Reset", style=discord.ButtonStyle.danger)
+    async def confirm_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester.id:
+            return await interaction.response.send_message("Only the admin who started this can confirm.", ephemeral=True)
+
+        if self.finished:
+            return await interaction.response.send_message("This reset is already finished.", ephemeral=True)
+
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("DELETE FROM inventory WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM balances WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM cooldowns WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM daily_streaks WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM loot_crates WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM user_boosts WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM user_titles WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM user_custom_emojis WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM user_owned_profile_emojis WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM user_owned_titles WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM snipe_items WHERE user_id=$1", self.target.id)
+                await conn.execute("DELETE FROM user_daily_limits WHERE user_id=$1", self.target.id)
+
+        self.finished = True
+
+        for child in self.children:
+            child.disabled = True
+
+        await send_staff_log(
+            interaction.guild,
+            "User Reset",
+            f"**User:** {self.target.mention}\n**Reset by:** {interaction.user.mention}",
+            discord.Color.red()
+        )
+
+        await interaction.response.edit_message(
+            content=f"{self.target.mention}'s bot data has been reset.",
+            embed=None,
+            view=self
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.requester.id:
+            return await interaction.response.send_message("Only the admin who started this can cancel.", ephemeral=True)
+
+        self.finished = True
+
+        for child in self.children:
+            child.disabled = True
+
+        await interaction.response.edit_message(
+            content="User reset cancelled.",
+            embed=None,
+            view=self
+        )
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -3506,17 +3724,66 @@ class Bot(discord.Client):
         self.tree = app_commands.CommandTree(self)
     async def setup_hook(self):
         global db_pool
+
+        if not TOKEN:
+            raise RuntimeError("DISCORD_TOKEN is missing. Add it in Railway Variables.")
+
+        if not DATABASE_URL:
+            raise RuntimeError("DATABASE_URL is missing. Add it in Railway Variables.")
+
+        print("Startup check: token found.")
+        print("Startup check: database URL found.")
+
         db_pool = await asyncpg.create_pool(DATABASE_URL)
+        print("Startup check: database pool created.")
+
         await setup_database()
-        await self.tree.sync()
+        print("Startup check: database tables checked.")
+
+        synced = await self.tree.sync()
+        print(f"Startup check: synced {len(synced)} slash commands.")
 
 bot = Bot()
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    print(f"Connected guilds: {len(bot.guilds)}")
+
+    for guild in bot.guilds:
+        print(f"- {guild.name} ({guild.id})")
+
     if not auto_drop.is_running():
         auto_drop.start()
+        print("Auto drop task started.")
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    original_error = getattr(error, "original", error)
+
+    print(f"Command error in /{interaction.command.name if interaction.command else 'unknown'}: {repr(original_error)}")
+
+    try:
+        await send_staff_log(
+            interaction.guild,
+            "Command Error",
+            f"**Command:** /{interaction.command.name if interaction.command else 'unknown'}\n"
+            f"**User:** {interaction.user.mention if interaction.user else 'Unknown'}\n"
+            f"**Error:** `{type(original_error).__name__}: {str(original_error)[:900]}`",
+            discord.Color.red()
+        )
+    except Exception as log_error:
+        print(f"Could not send command error log: {log_error}")
+
+    message = "Something went wrong while running that command. Staff has been notified if a staff log channel is set."
+
+    if isinstance(original_error, app_commands.MissingPermissions):
+        message = "You do not have permission to use that command."
+
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
 
 # ---------------- COMMANDS ----------------
 @bot.tree.command(name="settings", description="Admin only: view and edit bot game settings.")
@@ -3715,6 +3982,14 @@ async def addbal(interaction: discord.Interaction, user: discord.Member, amount:
     if amount <= 0:
         return await interaction.response.send_message("Amount must be greater than 0.", ephemeral=True)
     await add_balance(user.id, amount)
+
+    await send_staff_log(
+        interaction.guild,
+        "Currency Added",
+        f"**User:** {user.mention}\n**Amount:** {format_coins(amount)}\n**Added by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
     await interaction.response.send_message(
         f"Added **{format_coins(amount)}** to {user.mention}'s balance."
     )
@@ -3882,6 +4157,13 @@ async def buy(interaction: discord.Interaction, item: str):
 @app_commands.checks.has_permissions(administrator=True)
 async def togglestaffsnipe(interaction: discord.Interaction, enabled: bool):
     await set_staff_snipe_enabled(interaction.guild.id, enabled)
+
+    await send_staff_log(
+        interaction.guild,
+        "Staff Sniping Updated",
+        f"**New value:** {'Enabled' if enabled else 'Disabled'}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
 
     if enabled:
         message = "Staff members can now be sniped."
@@ -4052,6 +4334,7 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     bal = await get_balance(user.id)
     regular_crates, legendary_crates = await get_loot_crates(user.id)
     regular_snipers, legendary_snipers = await get_snipe_items(user.id)
+    active_boosts = await get_active_boosts(user.id)
     title = await get_title(user.id)
     custom_emoji = await get_user_custom_emoji(user.id)
     owned_profile_emojis = await get_user_owned_profile_emojis(user.id)
@@ -4263,6 +4546,13 @@ async def dropcard(
     if not cards:
         return await interaction.response.send_message("No cards found for that choice.", ephemeral=True)
     selected_card = random.choice(cards)
+    await send_staff_log(
+        interaction.guild,
+        "Manual Card Drop",
+        f"**Card:** {selected_card['name']}\n**ID:** `{selected_card['id']}`\n**Rarity:** {selected_card['rarity']}\n**Dropped by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
     await interaction.response.send_message(
         embed=create_card_embed(selected_card),
         view=ClaimView(selected_card)
@@ -4470,6 +4760,14 @@ async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
             ephemeral=True
         )
     await set_staff_role_db(interaction.guild.id, role.id)
+
+    await send_staff_log(
+        interaction.guild,
+        "Staff Role Updated",
+        f"**Role:** {role.mention}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
     await interaction.response.send_message(
         f"Staff role set to {role.mention}."
     )
@@ -4481,6 +4779,14 @@ async def addropchannel(interaction: discord.Interaction, channel: discord.TextC
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     await add_drop_channel_db(interaction.guild.id, channel.id)
+
+    await send_staff_log(
+        interaction.guild,
+        "Drop Channel Added",
+        f"**Channel:** {channel.mention}\n**Added by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
     await interaction.response.send_message(
         f"Added {channel.mention} as a drop channel."
     )
@@ -4492,6 +4798,14 @@ async def removedropchannel(interaction: discord.Interaction, channel: discord.T
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     await remove_drop_channel_db(interaction.guild.id, channel.id)
+
+    await send_staff_log(
+        interaction.guild,
+        "Drop Channel Removed",
+        f"**Channel:** {channel.mention}\n**Removed by:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
     await interaction.response.send_message(
         f"Removed {channel.mention} from drop channels."
     )
@@ -4544,6 +4858,13 @@ async def givesniper(
 
     sniper_name = "Legendary Sniper" if sniper_value == "legendary" else "Sniper"
 
+    await send_staff_log(
+        interaction.guild,
+        "Snipers Given",
+        f"**User:** {user.mention}\n**Item:** {amount}x {sniper_name}\n**Given by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
     await interaction.response.send_message(
         f"Gave {user.mention} **{amount}x {sniper_name}**."
     )
@@ -4575,6 +4896,13 @@ async def givecrate(
     await add_loot_crate(user.id, crate_value, amount)
 
     crate_name = "Legendary Loot Crate" if crate_value == "legendary" else "Loot Crate"
+
+    await send_staff_log(
+        interaction.guild,
+        "Crates Given",
+        f"**User:** {user.mention}\n**Item:** {amount}x {crate_name}\n**Given by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
 
     await interaction.response.send_message(
         f"Gave {user.mention} **{amount}x {crate_name}**."
@@ -4690,7 +5018,7 @@ async def staffhelp(interaction: discord.Interaction):
     embed.add_field(
         name="Admin / Setup",
         value=(
-            "`/settings` — Open Sanction Settings\n"
+            "`/settings` — Open Sanction Settings\n`/botstatus` — View current bot setup\n`/setstafflogchannel` — Set the staff log channel\n`/resetuser` — Reset one user\n"
             "`/setstaffrole` — Set the staff command role\n"
             "`/togglestaffsnipe` — Toggle staff sniping\n"
             "`/ping` — Check if the bot is online"
@@ -4699,6 +5027,129 @@ async def staffhelp(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="setstafflogchannel", description="Admin only: set the staff log channel.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Channel where staff logs should be sent")
+async def setstafflogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can set the staff log channel.", ephemeral=True)
+
+    await set_staff_log_channel_db(interaction.guild.id, channel.id)
+
+    embed = discord.Embed(
+        title="Staff Log Channel Set",
+        description=f"Staff logs will now be sent to {channel.mention}.",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    await send_staff_log(
+        interaction.guild,
+        "Staff Log Connected",
+        f"Staff log channel set by {interaction.user.mention}.",
+        discord.Color.from_str("#9e659d")
+    )
+
+@bot.tree.command(name="botstatus", description="Staff only: view bot settings and status.")
+@app_commands.default_permissions(manage_messages=True)
+async def botstatus(interaction: discord.Interaction):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    drop_settings = await get_drop_settings(interaction.guild.id)
+    economy_settings = await get_economy_settings(interaction.guild.id)
+    crate_settings = await get_crate_settings(interaction.guild.id)
+    snipe_settings = await get_snipe_settings(interaction.guild.id)
+    drop_channels = await get_drop_channels_db(interaction.guild.id)
+    staff_role_id = await get_staff_role(interaction.guild.id)
+    staff_log_channel_id = await get_staff_log_channel(interaction.guild.id)
+
+    channel_text = "None set" if not drop_channels else ", ".join([f"<#{channel_id}>" for channel_id in drop_channels])
+    staff_role_text = f"<@&{staff_role_id}>" if staff_role_id else "Not set"
+    staff_log_text = f"<#{staff_log_channel_id}>" if staff_log_channel_id else "Not set"
+
+    embed = discord.Embed(
+        title="Bot Status",
+        description="Current Sanction bot setup and settings.",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    embed.add_field(
+        name="Setup",
+        value=(
+            f"**Staff Role:** {staff_role_text}\n"
+            f"**Staff Log:** {staff_log_text}\n"
+            f"**Drop Channels:** {channel_text}"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Drops",
+        value=(
+            f"**Auto Drops:** {format_on_off(drop_settings['auto_drop_enabled'])}\n"
+            f"**Interval:** {int(drop_settings['auto_drop_minutes'])} minutes\n"
+            f"**Chance:** {int(drop_settings['auto_drop_chance'])}%\n"
+            f"**Claim Cooldown:** {int(drop_settings['claim_cooldown_seconds'])} seconds"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Economy",
+        value=(
+            f"**Daily:** {int(economy_settings['daily_min']):,} - {int(economy_settings['daily_max']):,} Sancs\n"
+            f"**Weekly:** {int(economy_settings['weekly_min']):,} - {int(economy_settings['weekly_max']):,} Sancs"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Crates / Snipe",
+        value=(
+            f"**Regular Crate:** {int(crate_settings['regular_crate_min']):,} - {int(crate_settings['regular_crate_max']):,} Sancs\n"
+            f"**Legendary Crate:** {int(crate_settings['legendary_crate_min']):,} - {int(crate_settings['legendary_crate_max']):,} Sancs\n"
+            f"**Staff Sniping:** {format_on_off(snipe_settings['staff_snipe_enabled'])}\n"
+            f"**Snipe Cooldown:** {int(snipe_settings['snipe_cooldown_seconds']) // 60} minutes"
+        ),
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="resetuser", description="Admin only: reset one user's bot data.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(user="User whose bot data should be reset")
+async def resetuser(interaction: discord.Interaction, user: discord.Member):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can reset user data.", ephemeral=True)
+
+    if user.bot:
+        return await interaction.response.send_message("You cannot reset bot users.", ephemeral=True)
+
+    embed = discord.Embed(
+        title="Confirm User Reset",
+        description=(
+            f"Are you sure you want to reset {user.mention}'s bot data?\n\n"
+            "**This will remove:**\n"
+            f"{BULLET_EMOJI} Balance\n"
+            f"{BULLET_EMOJI} Cards\n"
+            f"{BULLET_EMOJI} Crates\n"
+            f"{BULLET_EMOJI} Snipers\n"
+            f"{BULLET_EMOJI} Equipped title / emoji\n"
+            f"{BULLET_EMOJI} Owned titles / emojis\n"
+            f"{BULLET_EMOJI} Cooldowns and daily limits"
+        ),
+        color=discord.Color.red()
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=ResetUserConfirmView(interaction.user, user),
+        ephemeral=True
+    )
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
