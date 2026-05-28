@@ -519,15 +519,12 @@ async def set_staff_role_db(guild_id, role_id):
             DO UPDATE SET staff_role_id=$2
         """, guild_id, role_id)
 
-
-
 async def get_goos_log_channel(guild_id):
     async with db_pool.acquire() as conn:
         return await conn.fetchval(
             "SELECT goos_log_channel_id FROM server_settings WHERE guild_id=$1",
             guild_id
         )
-
 
 async def set_goos_log_channel_db(guild_id, channel_id):
     async with db_pool.acquire() as conn:
@@ -567,7 +564,6 @@ async def get_all_drop_channel_ids():
         rows = await conn.fetch("SELECT channel_id FROM drop_channels")
         return [row["channel_id"] for row in rows]
 
-
 async def get_drop_settings(guild_id):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -596,7 +592,6 @@ async def get_drop_settings(guild_id):
             "claim_cooldown_seconds": row["claim_cooldown_seconds"] or CLAIM_COOLDOWN
         }
 
-
 async def set_auto_drop_enabled_db(guild_id, enabled: bool):
     settings = await get_drop_settings(guild_id)
 
@@ -607,7 +602,6 @@ async def set_auto_drop_enabled_db(guild_id, enabled: bool):
             ON CONFLICT (guild_id)
             DO UPDATE SET auto_drop_enabled = EXCLUDED.auto_drop_enabled
         """, guild_id, enabled, settings["auto_drop_minutes"], settings["auto_drop_chance"], settings["claim_cooldown_seconds"])
-
 
 async def set_auto_drop_minutes_db(guild_id, minutes: int):
     settings = await get_drop_settings(guild_id)
@@ -620,7 +614,6 @@ async def set_auto_drop_minutes_db(guild_id, minutes: int):
             DO UPDATE SET auto_drop_minutes = EXCLUDED.auto_drop_minutes
         """, guild_id, settings["auto_drop_enabled"], minutes, settings["auto_drop_chance"], settings["claim_cooldown_seconds"])
 
-
 async def set_auto_drop_chance_db(guild_id, chance: int):
     settings = await get_drop_settings(guild_id)
 
@@ -632,7 +625,6 @@ async def set_auto_drop_chance_db(guild_id, chance: int):
             DO UPDATE SET auto_drop_chance = EXCLUDED.auto_drop_chance
         """, guild_id, settings["auto_drop_enabled"], settings["auto_drop_minutes"], chance, settings["claim_cooldown_seconds"])
 
-
 async def set_claim_cooldown_db(guild_id, seconds: int):
     settings = await get_drop_settings(guild_id)
 
@@ -643,7 +635,6 @@ async def set_claim_cooldown_db(guild_id, seconds: int):
             ON CONFLICT (guild_id)
             DO UPDATE SET claim_cooldown_seconds = EXCLUDED.claim_cooldown_seconds
         """, guild_id, settings["auto_drop_enabled"], settings["auto_drop_minutes"], settings["auto_drop_chance"], seconds)
-
 
 async def get_economy_settings(guild_id):
     async with db_pool.acquire() as conn:
@@ -686,7 +677,6 @@ async def get_economy_settings(guild_id):
 
         return dict(row)
 
-
 async def set_economy_setting_db(guild_id, column, value: int):
     allowed_columns = {
         "daily_min",
@@ -712,7 +702,6 @@ async def set_economy_setting_db(guild_id, column, value: int):
             value,
             guild_id
         )
-
 
 async def get_crate_settings(guild_id):
     async with db_pool.acquire() as conn:
@@ -748,7 +737,6 @@ async def get_crate_settings(guild_id):
 
         return dict(row)
 
-
 async def set_crate_setting_db(guild_id, column, value: int):
     allowed_columns = {
         "regular_crate_min",
@@ -771,7 +759,6 @@ async def set_crate_setting_db(guild_id, column, value: int):
             guild_id
         )
 
-
 async def is_staff_member(interaction: discord.Interaction):
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
         return False
@@ -781,7 +768,6 @@ async def is_staff_member(interaction: discord.Interaction):
     if saved_staff_role_id:
         return any(role.id == saved_staff_role_id for role in interaction.user.roles)
     return is_staff(interaction.user)
-
 
 async def get_staff_ping(interaction: discord.Interaction):
     if not interaction.guild:
@@ -793,7 +779,6 @@ async def get_staff_ping(interaction: discord.Interaction):
         return f"<@&{saved_staff_role_id}>"
 
     return f"<@&{STAFF_ROLE_ID}>"
-
 
 def create_goos_log_embed_from_values(buyer_id, goos_amount, sancs_cost, claimed_by=None, completed_by=None):
     description = (
@@ -816,7 +801,6 @@ def create_goos_log_embed_from_values(buyer_id, goos_amount, sancs_cost, claimed
     embed.set_footer(text="This request was created automatically after the user paid.")
 
     return embed
-
 
 async def send_goos_log(interaction: discord.Interaction, request_id, shop_item):
     if not interaction.guild:
@@ -971,7 +955,6 @@ def create_shop_embed():
 
     return embed
 
-
 def create_shop_item_embed(item_key):
     item = SHOP_ITEMS[item_key]
     emoji = get_shop_item_emoji(item)
@@ -1078,7 +1061,6 @@ def create_shop_item_embed(item_key):
 
     return embed
 
-
 async def create_title_shop_embed():
     rows = await get_active_shop_titles()
 
@@ -1111,7 +1093,6 @@ async def create_title_shop_embed():
     embed.set_thumbnail(url=TITLE_IMAGE_URL)
 
     return embed
-
 
 async def create_profile_emoji_shop_embed():
     rows = await get_active_profile_emojis()
@@ -1148,7 +1129,6 @@ async def create_profile_emoji_shop_embed():
     embed.set_thumbnail(url=CUSTOM_EMOJI_IMAGE_URL)
 
     return embed
-
 
 def card_label(card):
     return f"**ID:** `{card['id']}` {card['name']} ({card['rarity']})"
@@ -1389,7 +1369,6 @@ async def get_daily_limit_row(user_id, action_name):
             "amount_value": int(row["amount_value"])
         }
 
-
 async def add_daily_limit_usage(user_id, action_name, count_add=0, amount_add=0):
     today = eastern_day_number()
 
@@ -1402,7 +1381,6 @@ async def add_daily_limit_usage(user_id, action_name, count_add=0, amount_add=0)
                 count_value = user_daily_limits.count_value + $4,
                 amount_value = user_daily_limits.amount_value + $5
         """, user_id, action_name, today, count_add, amount_add)
-
 
 async def get_cooldown(user_id, command_name):
     async with db_pool.acquire() as conn:
@@ -1541,7 +1519,6 @@ async def set_title(user_id, title):
             DO UPDATE SET title=$2
         """, user_id, title)
 
-
 async def set_user_custom_emoji(user_id, emoji):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -1551,14 +1528,12 @@ async def set_user_custom_emoji(user_id, emoji):
             DO UPDATE SET emoji=$2
         """, user_id, emoji)
 
-
 async def get_user_custom_emoji(user_id):
     async with db_pool.acquire() as conn:
         return await conn.fetchval(
             "SELECT emoji FROM user_custom_emojis WHERE user_id=$1",
             user_id
         )
-
 
 async def add_profile_emoji_to_shop(name, emoji, price):
     async with db_pool.acquire() as conn:
@@ -1570,7 +1545,6 @@ async def add_profile_emoji_to_shop(name, emoji, price):
             RETURNING id
         """, name, emoji, price)
 
-
 async def remove_profile_emoji_from_shop(name):
     async with db_pool.acquire() as conn:
         result = await conn.execute(
@@ -1579,13 +1553,11 @@ async def remove_profile_emoji_from_shop(name):
         )
         return result.endswith("1")
 
-
 async def get_active_profile_emojis():
     async with db_pool.acquire() as conn:
         return await conn.fetch(
             "SELECT * FROM profile_emojis WHERE is_active=TRUE ORDER BY price, name"
         )
-
 
 async def get_profile_emoji_by_id(profile_emoji_id):
     async with db_pool.acquire() as conn:
@@ -1593,7 +1565,6 @@ async def get_profile_emoji_by_id(profile_emoji_id):
             "SELECT * FROM profile_emojis WHERE id=$1 AND is_active=TRUE",
             profile_emoji_id
         )
-
 
 async def user_owns_profile_emoji(user_id, profile_emoji_id):
     async with db_pool.acquire() as conn:
@@ -1603,7 +1574,6 @@ async def user_owns_profile_emoji(user_id, profile_emoji_id):
             profile_emoji_id
         )
 
-
 async def add_profile_emoji_to_user(user_id, profile_emoji_id):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -1611,7 +1581,6 @@ async def add_profile_emoji_to_user(user_id, profile_emoji_id):
             VALUES ($1, $2)
             ON CONFLICT DO NOTHING
         """, user_id, profile_emoji_id)
-
 
 async def get_user_owned_profile_emojis(user_id):
     async with db_pool.acquire() as conn:
@@ -1624,7 +1593,6 @@ async def get_user_owned_profile_emojis(user_id):
             ORDER BY profile_emojis.price, profile_emojis.name
         """, user_id)
 
-
 async def add_owned_title(user_id, title):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -1632,17 +1600,6 @@ async def add_owned_title(user_id, title):
             VALUES ($1, $2)
             ON CONFLICT DO NOTHING
         """, user_id, title)
-
-
-
-
-async def get_total_cards_owned(user_id):
-    async with db_pool.acquire() as conn:
-        return await conn.fetchval(
-            "SELECT COUNT(*) FROM inventory WHERE user_id=$1",
-            user_id
-        ) or 0
-
 
 async def get_user_owned_titles(user_id):
     async with db_pool.acquire() as conn:
@@ -1662,7 +1619,6 @@ async def add_title_to_shop(title, price):
             RETURNING id
         """, title, price)
 
-
 async def remove_title_from_shop(title):
     async with db_pool.acquire() as conn:
         result = await conn.execute(
@@ -1671,13 +1627,11 @@ async def remove_title_from_shop(title):
         )
         return result.endswith("1")
 
-
 async def get_active_shop_titles():
     async with db_pool.acquire() as conn:
         return await conn.fetch(
             "SELECT * FROM shop_titles WHERE is_active=TRUE ORDER BY price, title"
         )
-
 
 async def get_shop_title_by_id(title_id):
     async with db_pool.acquire() as conn:
@@ -1685,7 +1639,6 @@ async def get_shop_title_by_id(title_id):
             "SELECT * FROM shop_titles WHERE id=$1 AND is_active=TRUE",
             title_id
         )
-
 
 async def user_owns_title(user_id, title):
     async with db_pool.acquire() as conn:
@@ -1695,9 +1648,6 @@ async def user_owns_title(user_id, title):
             title
         )
 
-
-
-
 async def create_custom_emoji_request(user_id, emoji, price):
     async with db_pool.acquire() as conn:
         return await conn.fetchval("""
@@ -1705,7 +1655,6 @@ async def create_custom_emoji_request(user_id, emoji, price):
             VALUES ($1, $2, $3)
             RETURNING id
         """, user_id, emoji, price)
-
 
 async def approve_custom_emoji_request(request_id, staff_id):
     async with db_pool.acquire() as conn:
@@ -1736,7 +1685,6 @@ async def approve_custom_emoji_request(request_id, staff_id):
 
             return True, "Custom emoji approved.", row
 
-
 async def deny_custom_emoji_request(request_id, staff_id, reason="No reason provided."):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -1766,8 +1714,6 @@ async def deny_custom_emoji_request(request_id, staff_id, reason="No reason prov
 
             return True, "Custom emoji denied and refunded.", row
 
-
-
 async def create_goos_request(user_id, goos_amount, cost):
     async with db_pool.acquire() as conn:
         return await conn.fetchval("""
@@ -1775,8 +1721,6 @@ async def create_goos_request(user_id, goos_amount, cost):
             VALUES ($1, $2, $3)
             RETURNING id
         """, user_id, goos_amount, cost)
-
-
 
 async def claim_goos_request(request_id, staff_id):
     async with db_pool.acquire() as conn:
@@ -1801,7 +1745,6 @@ async def claim_goos_request(request_id, staff_id):
         """, staff_id, request_id)
 
         return True, "Request claimed."
-
 
 async def complete_goos_request(request_id, staff_id):
     async with db_pool.acquire() as conn:
@@ -1871,7 +1814,6 @@ async def remove_loot_crate(user_id, crate_type="regular"):
             )
             return True
 
-
 async def get_snipe_items(user_id):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -1888,7 +1830,6 @@ async def get_snipe_items(user_id):
 
         return row["regular_count"], row["legendary_count"]
 
-
 async def add_snipe_item(user_id, snipe_type="regular", amount=1):
     column = "legendary_count" if snipe_type == "legendary" else "regular_count"
 
@@ -1899,7 +1840,6 @@ async def add_snipe_item(user_id, snipe_type="regular", amount=1):
             ON CONFLICT (user_id)
             DO UPDATE SET {column} = snipe_items.{column} + $2
         """, user_id, amount)
-
 
 async def remove_snipe_item(user_id, snipe_type="regular"):
     column = "legendary_count" if snipe_type == "legendary" else "regular_count"
@@ -1928,8 +1868,6 @@ async def remove_snipe_item(user_id, snipe_type="regular"):
 
             return True
 
-
-
 async def get_staff_snipe_enabled(guild_id):
     async with db_pool.acquire() as conn:
         value = await conn.fetchval(
@@ -1946,7 +1884,6 @@ async def get_staff_snipe_enabled(guild_id):
 
         return value
 
-
 async def set_staff_snipe_enabled(guild_id, enabled: bool):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -1955,8 +1892,6 @@ async def set_staff_snipe_enabled(guild_id, enabled: bool):
             ON CONFLICT (guild_id)
             DO UPDATE SET staff_snipe_enabled = EXCLUDED.staff_snipe_enabled
         """, guild_id, enabled)
-
-
 
 async def get_snipe_settings(guild_id):
     async with db_pool.acquire() as conn:
@@ -1984,7 +1919,6 @@ async def get_snipe_settings(guild_id):
             "snipe_mute_minutes": row["snipe_mute_minutes"] or SNIPE_MUTE_MINUTES
         }
 
-
 async def set_staff_snipe_enabled(guild_id, enabled: bool):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -1993,7 +1927,6 @@ async def set_staff_snipe_enabled(guild_id, enabled: bool):
             ON CONFLICT (guild_id)
             DO UPDATE SET staff_snipe_enabled = EXCLUDED.staff_snipe_enabled
         """, guild_id, enabled, SNIPE_COOLDOWN, SNIPE_MUTE_MINUTES)
-
 
 async def set_snipe_cooldown_db(guild_id, minutes: int):
     seconds = minutes * 60
@@ -2006,7 +1939,6 @@ async def set_snipe_cooldown_db(guild_id, minutes: int):
             DO UPDATE SET snipe_cooldown_seconds = EXCLUDED.snipe_cooldown_seconds
         """, guild_id, seconds, SNIPE_MUTE_MINUTES)
 
-
 async def set_snipe_mute_minutes_db(guild_id, minutes: int):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -2016,11 +1948,9 @@ async def set_snipe_mute_minutes_db(guild_id, minutes: int):
             DO UPDATE SET snipe_mute_minutes = EXCLUDED.snipe_mute_minutes
         """, guild_id, SNIPE_COOLDOWN, minutes)
 
-
 async def get_staff_snipe_enabled(guild_id):
     settings = await get_snipe_settings(guild_id)
     return settings["staff_snipe_enabled"]
-
 
 async def choose_random_card_with_weights(weights):
     rarity = random.choices(
@@ -2085,7 +2015,6 @@ async def shop_autocomplete(interaction: discord.Interaction, current: str):
         and (current.lower() in item["name"].lower() or current.lower() in key.lower())
     ][:25]
 
-
 async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, current: str):
     rows = await get_user_owned_profile_emojis(interaction.user.id)
 
@@ -2094,7 +2023,6 @@ async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, cur
         for row in rows
         if current.lower() in row["name"].lower() or current.lower() in row["emoji"].lower()
     ][:25]
-
 
 async def owned_title_autocomplete(interaction: discord.Interaction, current: str):
     titles = await get_user_owned_titles(interaction.user.id)
@@ -2171,7 +2099,6 @@ async def auto_drop():
             continue
 
         await channel.send(embed=create_card_embed(card), view=ClaimView(card))
-
 
 # ---------------- CLAIM SYSTEM ----------------
 class ClaimView(discord.ui.View):
@@ -2318,8 +2245,6 @@ class RemoveCardView(discord.ui.View):
             view=self
         )
 
-
-
 # ---------------- SNIPE GAME ----------------
 
 def get_bush_emoji(bush_number):
@@ -2328,7 +2253,6 @@ def get_bush_emoji(bush_number):
         2: BUSH_2_EMOJI,
         3: BUSH_3_EMOJI,
     }.get(bush_number, BUSH_1_EMOJI)
-
 
 class SnipeGameView(discord.ui.View):
     def __init__(self, sniper, target, snipe_type="regular", mute_minutes=SNIPE_MUTE_MINUTES):
@@ -2438,7 +2362,6 @@ class SnipeGameView(discord.ui.View):
                 view=self
             )
 
-
 class SnipeGameButton(discord.ui.Button):
     def __init__(self, bush_number):
         super().__init__(
@@ -2450,7 +2373,6 @@ class SnipeGameButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         await self.view.handle_choice(interaction, self.bush_number)
-
 
 # ---------------- CUSTOM EMOJI REQUEST STAFF VIEW ----------------
 
@@ -2533,7 +2455,6 @@ class CustomEmojiRequestView(discord.ui.View):
             await user.send(f"Your custom name emoji request was denied and refunded. Reason: {reason}")
         except Exception:
             pass
-
 
 async def send_custom_emoji_log(interaction: discord.Interaction, request_id, emoji, price):
     if not interaction.guild:
@@ -2634,7 +2555,6 @@ class GoosRequestView(discord.ui.View):
             view=self
         )
 
-
 # ---------------- SHOP UI ----------------
 class GoosExchangeSelect(discord.ui.Select):
     def __init__(self):
@@ -2699,7 +2619,6 @@ class ExchangeItemView(discord.ui.View):
     async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=create_shop_embed(), view=ShopView())
 
-
 class ShopSelect(discord.ui.Select):
     def __init__(self):
         options = []
@@ -2747,8 +2666,6 @@ class BackToShopView(discord.ui.View):
     @discord.ui.button(label="Back to Shop", style=discord.ButtonStyle.secondary)
     async def back_to_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=create_shop_embed(), view=ShopView())
-
-
 
 # ---------------- COSMETIC BUY VIEWS ----------------
 
@@ -2804,12 +2721,10 @@ class ProfileEmojiBuySelect(discord.ui.Select):
             f"{interaction.user.mention} bought and equipped **{profile_emoji['name']}** {profile_emoji['emoji']} for **{format_coins(profile_emoji['price'])}**!"
         )
 
-
 class ProfileEmojiBuyView(discord.ui.View):
     def __init__(self, rows):
         super().__init__(timeout=180)
         self.add_item(ProfileEmojiBuySelect(rows))
-
 
 class TitleBuySelect(discord.ui.Select):
     def __init__(self, rows):
@@ -2862,18 +2777,15 @@ class TitleBuySelect(discord.ui.Select):
             f"{interaction.user.mention} bought and equipped the title **{shop_title['title']}** for **{format_coins(shop_title['price'])}**!"
         )
 
-
 class TitleBuyView(discord.ui.View):
     def __init__(self, rows):
         super().__init__(timeout=180)
         self.add_item(TitleBuySelect(rows))
 
-
 # ---------------- SANCTION SETTINGS UI ----------------
 
 def format_on_off(value: bool):
     return TOGGLE_ON_EMOJI if value else TOGGLE_OFF_EMOJI
-
 
 async def create_settings_home_embed(guild_id):
     settings = await get_snipe_settings(guild_id)
@@ -2895,7 +2807,6 @@ async def create_settings_home_embed(guild_id):
     embed.set_footer(text="Choose a settings category below.")
 
     return embed
-
 
 async def create_snipe_settings_embed(guild_id):
     settings = await get_snipe_settings(guild_id)
@@ -2919,7 +2830,6 @@ async def create_snipe_settings_embed(guild_id):
     embed.set_footer(text="Use the dropdown below to edit snipe settings.")
 
     return embed
-
 
 async def create_drop_settings_embed(guild_id):
     settings = await get_drop_settings(guild_id)
@@ -2946,7 +2856,6 @@ async def create_drop_settings_embed(guild_id):
 
     return embed
 
-
 async def create_economy_settings_embed(guild_id):
     settings = await get_economy_settings(guild_id)
 
@@ -2968,8 +2877,6 @@ async def create_economy_settings_embed(guild_id):
     embed.set_footer(text="Use the dropdown below to edit economy settings.")
 
     return embed
-
-
 
 class EconomyNumberModal(discord.ui.Modal):
     def __init__(self, title_text, setting_key, label, placeholder, min_value, max_value):
@@ -3013,7 +2920,6 @@ class EconomyNumberModal(discord.ui.Modal):
             embed=await create_economy_settings_embed(interaction.guild.id),
             view=EconomySettingsView()
         )
-
 
 class EconomySettingsSelect(discord.ui.Select):
     def __init__(self):
@@ -3062,7 +2968,6 @@ class EconomySettingsSelect(discord.ui.Select):
             EconomyNumberModal(title_text, choice, label, placeholder, min_value, max_value)
         )
 
-
 class EconomySettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -3088,7 +2993,6 @@ class EconomySettingsView(discord.ui.View):
             view=EconomySettingsView()
         )
 
-
 async def create_crate_settings_embed(guild_id):
     settings = await get_crate_settings(guild_id)
 
@@ -3107,8 +3011,6 @@ async def create_crate_settings_embed(guild_id):
     embed.set_footer(text="Use the dropdown below to edit crate settings.")
 
     return embed
-
-
 
 class CrateNumberModal(discord.ui.Modal):
     def __init__(self, title_text, setting_key, label, placeholder, min_value, max_value):
@@ -3153,7 +3055,6 @@ class CrateNumberModal(discord.ui.Modal):
             view=CrateSettingsView()
         )
 
-
 class CrateSettingsSelect(discord.ui.Select):
     def __init__(self):
         options = [
@@ -3193,7 +3094,6 @@ class CrateSettingsSelect(discord.ui.Select):
             CrateNumberModal(title_text, choice, label, placeholder, min_value, max_value)
         )
 
-
 class CrateSettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -3219,7 +3119,6 @@ class CrateSettingsView(discord.ui.View):
             view=CrateSettingsView()
         )
 
-
 async def create_cosmetic_settings_embed(guild_id):
     profile_emojis = await get_active_profile_emojis()
     titles = await get_active_shop_titles()
@@ -3239,7 +3138,6 @@ async def create_cosmetic_settings_embed(guild_id):
     embed.set_footer(text="Choose a category to continue editing settings.")
 
     return embed
-
 
 async def create_staff_settings_embed(guild_id):
     staff_role_id = await get_staff_role(guild_id)
@@ -3267,10 +3165,8 @@ async def create_staff_settings_embed(guild_id):
 
     return embed
 
-
 async def create_settings_embed(guild_id):
     return await create_settings_home_embed(guild_id)
-
 
 class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
     minutes = discord.ui.TextInput(
@@ -3296,7 +3192,6 @@ class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
             view=SnipeSettingsView()
         )
 
-
 class SnipeMuteModal(discord.ui.Modal, title="Set Snipe Mute Time"):
     minutes = discord.ui.TextInput(
         label="Mute time in minutes",
@@ -3320,8 +3215,6 @@ class SnipeMuteModal(discord.ui.Modal, title="Set Snipe Mute Time"):
             embed=await create_snipe_settings_embed(interaction.guild.id),
             view=SnipeSettingsView()
         )
-
-
 
 class AutoDropIntervalModal(discord.ui.Modal, title="Set Auto Drop Interval"):
     minutes = discord.ui.TextInput(
@@ -3347,7 +3240,6 @@ class AutoDropIntervalModal(discord.ui.Modal, title="Set Auto Drop Interval"):
             view=DropSettingsView()
         )
 
-
 class AutoDropChanceModal(discord.ui.Modal, title="Set Auto Drop Chance"):
     chance = discord.ui.TextInput(
         label="Chance percentage",
@@ -3372,7 +3264,6 @@ class AutoDropChanceModal(discord.ui.Modal, title="Set Auto Drop Chance"):
             view=DropSettingsView()
         )
 
-
 class ClaimCooldownModal(discord.ui.Modal, title="Set Claim Cooldown"):
     seconds = discord.ui.TextInput(
         label="Claim cooldown in seconds",
@@ -3396,7 +3287,6 @@ class ClaimCooldownModal(discord.ui.Modal, title="Set Claim Cooldown"):
             embed=await create_drop_settings_embed(interaction.guild.id),
             view=DropSettingsView()
         )
-
 
 class DropSettingsSelect(discord.ui.Select):
     def __init__(self):
@@ -3439,7 +3329,6 @@ class DropSettingsSelect(discord.ui.Select):
         if choice == "set_claim_cooldown":
             return await interaction.response.send_modal(ClaimCooldownModal())
 
-
 class DropSettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -3464,9 +3353,6 @@ class DropSettingsView(discord.ui.View):
             embed=await create_drop_settings_embed(interaction.guild.id),
             view=DropSettingsView()
         )
-
-
-
 
 class StaffSettingsView(discord.ui.View):
     def __init__(self):
@@ -3497,7 +3383,6 @@ class StaffSettingsView(discord.ui.View):
             embed=await create_staff_settings_embed(interaction.guild.id),
             view=StaffSettingsView()
         )
-
 
 class SettingsCategorySelect(discord.ui.Select):
     def __init__(self):
@@ -3559,7 +3444,6 @@ class SettingsCategorySelect(discord.ui.Select):
                 view=StaffSettingsView()
             )
 
-
 class SanctionSettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -3574,7 +3458,6 @@ class SanctionSettingsView(discord.ui.View):
             embed=await create_settings_home_embed(interaction.guild.id),
             view=SanctionSettingsView()
         )
-
 
 class SettingsBackView(discord.ui.View):
     def __init__(self):
@@ -3599,7 +3482,6 @@ class SettingsBackView(discord.ui.View):
             embed=await create_settings_home_embed(interaction.guild.id),
             view=SanctionSettingsView()
         )
-
 
 class SnipeSettingsSelect(discord.ui.Select):
     def __init__(self):
@@ -3638,7 +3520,6 @@ class SnipeSettingsSelect(discord.ui.Select):
         if choice == "set_mute":
             return await interaction.response.send_modal(SnipeMuteModal())
 
-
 class SnipeSettingsView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
@@ -3663,7 +3544,6 @@ class SnipeSettingsView(discord.ui.View):
             embed=await create_snipe_settings_embed(interaction.guild.id),
             view=SnipeSettingsView()
         )
-
 
 # ---------------- BOT ----------------
 class Bot(discord.Client):
@@ -3696,7 +3576,6 @@ async def settings(interaction: discord.Interaction):
         view=SanctionSettingsView(),
         ephemeral=True
     )
-
 
 @bot.tree.command(name="ping", description="Staff only: check if the bot is online.")
 @app_commands.default_permissions(manage_messages=True)
@@ -3828,7 +3707,6 @@ async def weekly(interaction: discord.Interaction):
     await interaction.edit_original_response(
         content=rewards_text
     )
-
 
 @bot.tree.command(name="givecurrency", description="Give some of your currency to another user.")
 @app_commands.describe(
@@ -3970,7 +3848,6 @@ async def buy(interaction: discord.Interaction, item: str):
             ephemeral=True
         )
 
-
     if item not in SHOP_ITEMS:
         return await interaction.response.send_message("That shop item does not exist.", ephemeral=True)
     shop_item = SHOP_ITEMS[item]
@@ -4045,8 +3922,6 @@ async def buy(interaction: discord.Interaction, item: str):
         f"{interaction.user.mention} bought **{shop_item['name']}** for **{format_coins(shop_item['price'])}**!"
     )
 
-
-
 @bot.tree.command(name="togglestaffsnipe", description="Enable or disable sniping staff members.")
 @app_commands.default_permissions(administrator=True)
 @app_commands.describe(enabled="Turn staff sniping on or off")
@@ -4062,7 +3937,6 @@ async def togglestaffsnipe(interaction: discord.Interaction, enabled: bool):
     await interaction.response.send_message(
         f"{SNIPE_EMOJI} | {message}"
     )
-
 
 @bot.tree.command(name="snipe", description="Use a Sniper to target another user.")
 @app_commands.describe(user="User to snipe")
@@ -4091,7 +3965,6 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
 
     if target_id == sniper_id:
         return await interaction.response.send_message("You cannot snipe yourself.", ephemeral=True)
-
 
     if target.timed_out_until and target.timed_out_until > discord.utils.utcnow():
         return await interaction.response.send_message("That user is already muted.", ephemeral=True)
@@ -4125,7 +3998,6 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
         f"{target.mention}, choose a bush to hide in.",
         view=view
     )
-
 
 @bot.tree.command(name="opencrate", description="Open a Loot Crate or Legendary Loot Crate.")
 @app_commands.describe(crate_type="Choose which crate to open")
@@ -4471,7 +4343,6 @@ async def removecard(interaction: discord.Interaction, card_name: str):
         ephemeral=True
     )
 
-
 @bot.tree.command(name="addtitle", description="Staff only: add a preset title to the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
@@ -4491,7 +4362,6 @@ async def addtitle(interaction: discord.Interaction, title: str, price: int):
         f"Added title **{title}** for **{format_coins(price)}**. **ID:** `{title_id}`"
     )
 
-
 @bot.tree.command(name="removetitle", description="Staff only: remove a preset title from the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(title="Title to remove")
@@ -4505,7 +4375,6 @@ async def removetitle(interaction: discord.Interaction, title: str):
         return await interaction.response.send_message("That title was not found.", ephemeral=True)
 
     await interaction.response.send_message(f"Removed **{title}** from the title shop.")
-
 
 @bot.tree.command(name="listtitles", description="View all preset titles in the shop.")
 async def listtitles(interaction: discord.Interaction):
@@ -4537,7 +4406,6 @@ async def listtitles(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-
 @bot.tree.command(name="addprofileemoji", description="Staff only: add a preset profile emoji to the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
@@ -4558,7 +4426,6 @@ async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: st
         f"Added profile emoji **{name}** {emoji} for **{format_coins(price)}**. **ID:** `{emoji_id}`"
     )
 
-
 @bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(name="Profile emoji name to remove")
@@ -4572,7 +4439,6 @@ async def removeprofileemoji(interaction: discord.Interaction, name: str):
         return await interaction.response.send_message("That profile emoji was not found.", ephemeral=True)
 
     await interaction.response.send_message(f"Removed **{name}** from the profile emoji shop.")
-
 
 @bot.tree.command(name="listprofileemojis", description="View all preset profile emojis in the shop.")
 async def listprofileemojis(interaction: discord.Interaction):
@@ -4604,7 +4470,6 @@ async def listprofileemojis(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
-
 @bot.tree.command(name="equipemoji", description="Equip one of your owned profile emojis.")
 @app_commands.describe(emoji="Choose an emoji you own")
 @app_commands.autocomplete(emoji=owned_profile_emoji_autocomplete)
@@ -4628,7 +4493,6 @@ async def equipemoji(interaction: discord.Interaction, emoji: str):
         f"Equipped **{profile_emoji['name']}** {profile_emoji['emoji']}."
     )
 
-
 @bot.tree.command(name="equiptitle", description="Equip one of your owned titles.")
 @app_commands.describe(title="Choose a title you own")
 @app_commands.autocomplete(title=owned_title_autocomplete)
@@ -4641,74 +4505,6 @@ async def equiptitle(interaction: discord.Interaction, title: str):
     await set_title(interaction.user.id, title)
 
     await interaction.response.send_message(f"Equipped title **{title}**.")
-
-
-@bot.tree.command(name="gooslogtest", description="Admin only: test the Goos log channel.")
-@app_commands.default_permissions(administrator=True)
-async def gooslogtest(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message(
-            "Only server administrators can test the Goos log channel.",
-            ephemeral=True
-        )
-
-    channel_id = await get_goos_log_channel(interaction.guild.id)
-
-    if not channel_id:
-        return await interaction.response.send_message(
-            "No Goos log channel is set. Run `/setgooslogchannel #channel` first.",
-            ephemeral=True
-        )
-
-    channel = interaction.guild.get_channel(channel_id)
-
-    if channel is None:
-        channel = bot.get_channel(channel_id)
-
-    if channel is None:
-        try:
-            channel = await bot.fetch_channel(channel_id)
-        except Exception:
-            return await interaction.response.send_message(
-                "I could not access that Goos log channel. Make sure I can view and send messages there.",
-                ephemeral=True
-            )
-
-    await channel.send(
-        f"{BULLET_EMOJI} Goos log test successful. This channel is connected."
-    )
-
-    await interaction.response.send_message(
-        f"Goos log test sent to {channel.mention}.",
-        ephemeral=True
-    )
-
-
-@bot.tree.command(name="setgooslogchannel", description="Admin only: set the staff log channel for Goos exchange requests.")
-@app_commands.default_permissions(administrator=True)
-@app_commands.describe(channel="Channel where Goos exchange requests should be logged")
-async def setgooslogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message(
-            "Only server administrators can set the Goos log channel.",
-            ephemeral=True
-        )
-
-    await set_goos_log_channel_db(interaction.guild.id, channel.id)
-
-    try:
-        await channel.send(f"{BULLET_EMOJI} Goos exchange log channel connected.")
-    except Exception:
-        return await interaction.response.send_message(
-            "I saved that channel, but I could not send a test message there. Please check my channel permissions.",
-            ephemeral=True
-        )
-
-    await interaction.response.send_message(
-        f"Goos exchange log channel set to {channel.mention}.",
-        ephemeral=True
-    )
-
 
 @bot.tree.command(name="setstaffrole", description="Admin only: set the staff role for this server.")
 @app_commands.default_permissions(administrator=True)
@@ -4724,10 +4520,10 @@ async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
         f"Staff role set to {role.mention}."
     )
 
-@bot.tree.command(name="adddropchannel", description="Staff only: add a channel for automatic card drops.")
+@bot.tree.command(name="addropchannel", description="Staff only: add a channel for automatic card drops.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(channel="Channel where automatic drops can happen")
-async def adddropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+async def addropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     await add_drop_channel_db(interaction.guild.id, channel.id)
@@ -4766,47 +4562,6 @@ async def listdropchannels(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-
-
-@bot.tree.command(name="profile", description="View your profile.")
-async def profile(interaction: discord.Interaction, user: Optional[discord.Member] = None):
-    target = user or interaction.user
-
-    balance = await get_balance(target.id)
-    title = await get_title(target.id)
-    emoji = await get_user_custom_emoji(target.id)
-    cards_owned = await get_total_cards_owned(target.id)
-
-    name_line = target.display_name
-
-    if emoji:
-        name_line += f" {emoji}"
-
-    if title:
-        name_line += f" — {title}"
-
-    embed = discord.Embed(
-        title=name_line,
-        color=discord.Color.from_str("#9e659d")
-    )
-
-    embed.add_field(
-        name="Balance",
-        value=format_coins(balance),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Stats",
-        value=f"• Cards Owned: {cards_owned}",
-        inline=False
-    )
-
-    await interaction.response.send_message(embed=embed)
-
-
-
-
 @bot.tree.command(name="givesniper", description="Staff only: give sniper items.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(
@@ -4838,7 +4593,6 @@ async def givesniper(
     await interaction.response.send_message(
         f"Gave {user.mention} **{amount}x {sniper_name}**."
     )
-
 
 @bot.tree.command(name="givecrate", description="Staff only: give loot crates.")
 @app_commands.default_permissions(manage_messages=True)
@@ -4872,6 +4626,129 @@ async def givecrate(
         f"Gave {user.mention} **{amount}x {crate_name}**."
     )
 
+@bot.tree.command(name="help", description="View member commands and bot help.")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="Sanction Bot Help",
+        description="Here are the main commands members can use.",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    embed.add_field(
+        name="Currency",
+        value=(
+            "`/balance` — View your Sancs balance\n"
+            "`/daily` — Claim your daily Sancs\n"
+            "`/weekly` — Claim your weekly reward\n"
+            "`/givecurrency` — Give Sancs to another member\n"
+            "`/leaderboard` — View the richest members\n"
+            "`/shop` — Open the shop\n"
+            "`/buy` — Buy an item\n"
+            "`/sell` — Sell one of your cards"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Cards",
+        value=(
+            "`/cards` — View obtainable cards\n"
+            "`/viewcard` — View a specific card\n"
+            "`/inventory` — View your inventory\n"
+            "`/trade` — Trade cards with another member\n"
+            "`/opencrate` — Open a loot crate"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Cosmetics",
+        value=(
+            "`/listtitles` — View available titles\n"
+            "`/equiptitle` — Equip a title you own\n"
+            "`/listprofileemojis` — View available profile emojis\n"
+            "`/equipemoji` — Equip a profile emoji you own"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Snipe",
+        value="`/snipe` — Use a sniper against another member",
+        inline=False
+    )
+
+    embed.set_footer(text="Staff can use /staffhelp for staff-only commands.")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="staffhelp", description="Staff only: view staff and admin commands.")
+@app_commands.default_permissions(manage_messages=True)
+async def staffhelp(interaction: discord.Interaction):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    embed = discord.Embed(
+        title="Staff Help",
+        description="Staff and admin command reference.",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    embed.add_field(
+        name="Staff Currency / Rewards",
+        value=(
+            "`/addbal` — Add Sancs to a member\n"
+            "`/givesniper` — Give regular or legendary snipers\n"
+            "`/givecrate` — Give regular or legendary crates"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Staff Cards",
+        value=(
+            "`/addcard` — Add or reactivate a card\n"
+            "`/dropcard` — Manually drop a card\n"
+            "`/removecard` — Remove a card from future drops"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Drop Channels",
+        value=(
+            "`/addropchannel` — Add an auto-drop channel\n"
+            "`/removedropchannel` — Remove an auto-drop channel\n"
+            "`/listdropchannels` — View auto-drop channels"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Cosmetics",
+        value=(
+            "`/addtitle` — Add a title to the shop\n"
+            "`/removetitle` — Remove a title from the shop\n"
+            "`/addprofileemoji` — Add a profile emoji to the shop\n"
+            "`/removeprofileemoji` — Remove a profile emoji from the shop"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Admin / Setup",
+        value=(
+            "`/settings` — Open Sanction Settings\n"
+            "`/setstaffrole` — Set the staff command role\n"
+            "`/setgooslogchannel` — Set the staff log channel\n"
+            "`/gooslogtest` — Test the log channel\n"
+            "`/togglestaffsnipe` — Toggle staff sniping\n"
+            "`/ping` — Check if the bot is online"
+        ),
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
