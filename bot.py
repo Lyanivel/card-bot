@@ -1261,6 +1261,12 @@ def format_card_type(card):
         return f"Custom • {custom_type}"
     return rarity
 
+def trade_card_display(card):
+    return f"**{card['name']}**\n**ID:** `{card['id']}`\n**Rarity:** {format_card_type(card)}"
+
+def trade_card_inline(card):
+    return f"**{card['name']}** (**ID:** `{card['id']}`)"
+
 def clean_card_ref(card_ref: str):
     return card_ref.strip().replace("#", "").replace("ID", "").replace("id", "").strip()
 
@@ -2313,54 +2319,133 @@ class ClaimView(discord.ui.View):
 
 # ---------------- TRADE SYSTEM ----------------
 class TradeView(discord.ui.View):
-    def __init__(self, requester, target, requester_card, target_card):
+    def __init__(self, requester, target, your_card, their_card):
         super().__init__(timeout=120)
         self.requester = requester
         self.target = target
-        self.requester_card = requester_card
-        self.target_card = target_card
+        self.your_card = your_card
+        self.their_card = their_card
         self.finished = False
-        active_trade_card_ids.add(requester_card["id"])
-        active_trade_card_ids.add(target_card["id"])
+
     def clear_active_trade_cards(self):
-        active_trade_card_ids.discard(self.requester_card["id"])
-        active_trade_card_ids.discard(self.target_card["id"])
-    async def on_timeout(self):
-        self.finished = True
-        self.clear_active_trade_cards()
-    @discord.ui.button(label="Accept", style=discord.ButtonStyle.green)
-    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        active_trade_card_ids.discard(self.your_card["id"])
+        active_trade_card_ids.discard(self.their_card["id"])
+
+    def create_embed(self):
+        embed = discord.Embed(
+            title="Trade Request",
+            description=f"{self.requester.mention} wants to trade with {self.target.mention}.",
+            color=discord.Color.from_str("#9e659d")
+        )
+
+        embed.add_field(
+            name=f"{self.requester.display_name} is offering",
+            value=trade_card_display(self.your_card),
+            inline=True
+        )
+
+        embed.add_field(
+            name=f"{self.target.display_name} would give",
+            value=trade_card_display(self.their_card),
+            inline=True
+        )
+
+        embed.set_footer(text=f"{self.target.display_name} can accept or decline this trade.")
+        return embed
+
+    def completed_embed(self):
+        embed = discord.Embed(
+            title="Trade Accepted",
+            description=(
+                f"{self.target.mention} accepted the trade.\n\n"
+                f"**{self.requester.display_name} gave:**\n"
+                f"{trade_card_display(self.your_card)}\n\n"
+                f"**{self.target.display_name} gave:**\n"
+                f"{trade_card_display(self.their_card)}"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="The cards have been exchanged successfully.")
+        return embed
+
+    def declined_embed(self):
+        embed = discord.Embed(
+            title="Trade Declined",
+            description=(
+                f"{self.target.mention} declined {self.requester.mention}'s trade request.\n\n"
+                "No cards were exchanged."
+            ),
+            color=discord.Color.red()
+        )
+        return embed
+
+    async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.target.id:
-            return await interaction.response.send_message("Not your trade.", ephemeral=True)
+            await interaction.response.send_message(
+                "Only the person receiving this trade can accept or decline it.",
+                ephemeral=True
+            )
+            return False
+
         if self.finished:
-            return await interaction.response.send_message("This trade is already finished.", ephemeral=True)
+            await interaction.response.send_message(
+                "This trade is already finished.",
+                ephemeral=True
+            )
+            return False
+
+        return True
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success)
+    async def accept_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+
         success, msg = await trade_cards(
             self.requester.id,
-            self.requester_card["id"],
+            self.your_card["id"],
             self.target.id,
-            self.target_card["id"]
+            self.their_card["id"]
         )
+
+        self.finished = True
+        self.clear_active_trade_cards()
+
+        for child in self.children:
+            child.disabled = True
+
+        if not success:
+            embed = discord.Embed(
+                title="Trade Failed",
+                description=msg,
+                color=discord.Color.red()
+            )
+            return await interaction.edit_original_response(embed=embed, view=self)
+
         await add_daily_limit_usage(self.requester.id, "trade", count_add=1)
         await add_daily_limit_usage(self.target.id, "trade", count_add=1)
 
-        self.finished = True
-        self.clear_active_trade_cards()
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content=msg, embed=None, view=self)
-    @discord.ui.button(label="Decline", style=discord.ButtonStyle.red)
-    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.target.id:
-            return await interaction.response.send_message("Not your trade.", ephemeral=True)
-        if self.finished:
-            return await interaction.response.send_message("This trade is already finished.", ephemeral=True)
-        self.finished = True
-        self.clear_active_trade_cards()
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(content="Trade declined.", embed=None, view=self)
+        await interaction.edit_original_response(embed=self.completed_embed(), view=self)
 
-# ---------------- REMOVE CARD CONFIRMATION ----------------
+    @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
+    async def decline_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.finished = True
+        self.clear_active_trade_cards()
+
+        for child in self.children:
+            child.disabled = True
+
+        await interaction.response.edit_message(embed=self.declined_embed(), view=self)
+
+    async def on_timeout(self):
+        if self.finished:
+            return
+
+        self.finished = True
+        self.clear_active_trade_cards()
+
+        for child in self.children:
+            child.disabled = True
+
 class RemoveCardView(discord.ui.View):
     def __init__(self, requester, card):
         super().__init__(timeout=60)
@@ -4876,54 +4961,7 @@ async def trade(
     their_card: str
 ):
     if user.bot:
-        return await interaction.response.send_message("Cannot trade with bots.", ephemeral=True)
-    if user.id == interaction.user.id:
-        return await interaction.response.send_message("You cannot trade yourself.", ephemeral=True)
-    your_card_data = await get_active_card_by_ref(your_card)
-    their_card_data = await get_active_card_by_ref(their_card)
-    if not your_card_data or not their_card_data:
-        return await interaction.response.send_message("One of those cards is not currently tradeable.", ephemeral=True)
-    if your_card_data["id"] in active_trade_card_ids or their_card_data["id"] in active_trade_card_ids:
-        return await interaction.response.send_message(
-            "One of those cards is already part of an active trade. Try again after that trade finishes.",
-            ephemeral=True
-        )
-    if not await user_owns_card(interaction.user.id, your_card_data["id"]):
-        return await interaction.response.send_message(
-            f"You do not own **{your_card_data['name']}**.",
-            ephemeral=True
-        )
-    if not await user_owns_card(user.id, their_card_data["id"]):
-        return await interaction.response.send_message(
-            f"{user.display_name} does not own **{their_card_data['name']}**.",
-            ephemeral=True
-        )
-    requester_trade_usage = await get_daily_limit_row(interaction.user.id, "trade")
-    target_trade_usage = await get_daily_limit_row(user.id, "trade")
-
-    if requester_trade_usage["count_value"] >= MAX_TRADES_PER_DAY:
-        return await interaction.response.send_message(
-            f"You have reached your daily trade limit of **{MAX_TRADES_PER_DAY}** trades.",
-            ephemeral=True
-        )
-
-    if target_trade_usage["count_value"] >= MAX_TRADES_PER_DAY:
-        return await interaction.response.send_message(
-            f"{user.display_name} has reached their daily trade limit of **{MAX_TRADES_PER_DAY}** trades.",
-            ephemeral=True
-        )
-
-    view = TradeView(interaction.user, user, your_card_data, their_card_data)
-    embed = discord.Embed(
-        title="Trade Request",
-        description=(
-            f"{interaction.user.mention} offers **{your_card_data['name']}** `**ID:** `{your_card_data['id']}``\n"
-            f"in exchange for **{their_card_data['name']}** `**ID:** `{their_card_data['id']}`` from {user.mention}\n\n"
-            f"{user.mention}, accept or decline this trade."
-        ),
-        color=discord.Color.from_str("#9e659d")
-    )
-    await interaction.response.send_message(embed=embed, view=view)
+        return await interaction.response.send_message(embed=view.create_embed(), view=view)
 
 @bot.tree.command(name="addcard", description="Staff only: add or reactivate a collectible card.")
 @app_commands.default_permissions(manage_messages=True)
@@ -4978,7 +5016,7 @@ async def addcard(
                 existing_card["id"]
             )
             return await interaction.response.send_message(
-                f"Reactivated/updated **{name}** as a **{rarity.value}** card. `**ID:** `{existing_card['id']}``"
+                f"Reactivated/updated **{name}** as a **{rarity.value}** card. **ID:** `{existing_card['id']}``"
             )
         new_id = await conn.fetchval(
             "INSERT INTO cards (name, rarity, image, is_active, custom_type) VALUES ($1,$2,$3, TRUE, $4) RETURNING id",
@@ -4987,7 +5025,7 @@ async def addcard(
             image,
             selected_custom_type
         )
-    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. `**ID:** `{new_id}``")
+    await interaction.response.send_message(f"Added **{name}** as a **{rarity.value}** card. **ID:** `{new_id}``")
 
 @bot.tree.command(name="dropcard", description="Staff only: drop a card.")
 @app_commands.default_permissions(manage_messages=True)
