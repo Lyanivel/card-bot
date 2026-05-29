@@ -1182,15 +1182,16 @@ async def create_title_shop_embed():
         lines = []
 
         for price in sorted(grouped.keys()):
-            lines.append(f"{format_coins(price)}")
+            lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
+            lines.append("")
 
             for row in grouped[price]:
-                lines.append(f"{row['title']}")
+                lines.append(f"{BULLET_EMOJI} **{row['title']}**")
 
             lines.append("")
 
-        details = "```text\n" + "\n".join(lines).strip() + "\n```"
-        details += "\nUse `/buy` and choose `Special Title` to purchase."
+        details = "\n".join(lines).strip()
+        details += "\n\nUse `/buy` and choose `Special Title` to purchase."
 
     embed = discord.Embed(
         title=f"{TITLE_EMOJI} Title Shop",
@@ -1216,6 +1217,7 @@ async def create_profile_emoji_shop_embed():
 
         for price in sorted(grouped.keys()):
             lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
+            lines.append("")
 
             emojis = [row["emoji"] for row in grouped[price]]
 
@@ -1270,10 +1272,6 @@ def create_card_embed(card):
         description=f"**{card['name']}** appeared!\n**ID:** `{card['id']}`",
         color=get_color(card["rarity"])
     )
-
-    custom_type = get_record_value(card, "custom_type")
-    if card["rarity"] == "Custom" and custom_type:
-        embed.add_field(name="Type", value=custom_type, inline=True)
 
     embed.set_image(url=card["image"])
     return embed
@@ -4075,6 +4073,121 @@ class EventSetupView(discord.ui.View):
 
         await interaction.response.edit_message(embed=await create_eventsetup_home_embed(interaction.guild.id), view=EventSetupView())
 
+def build_cards_page_embed(grouped_cards, rarity, page, per_page=10):
+    cards_for_rarity = grouped_cards.get(rarity, [])
+    total_pages = max(1, (len(cards_for_rarity) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+
+    start_index = page * per_page
+    page_cards = cards_for_rarity[start_index:start_index + per_page]
+
+    if not page_cards:
+        description = f"No {rarity} cards are currently obtainable."
+    else:
+        lines = []
+        for card in page_cards:
+            lines.append(f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({format_card_type(card)})")
+        description = "\n".join(lines)
+
+    embed = discord.Embed(
+        title=f"Currently Obtainable Cards — {rarity}",
+        description=description,
+        color=get_color(rarity)
+    )
+    embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+    return embed
+
+class CardRaritySelect(discord.ui.Select):
+    def __init__(self, view_ref):
+        self.view_ref = view_ref
+        options = [
+            discord.SelectOption(label="Common", value="Common"),
+            discord.SelectOption(label="Rare", value="Rare"),
+            discord.SelectOption(label="Epic", value="Epic"),
+            discord.SelectOption(label="Legendary", value="Legendary"),
+            discord.SelectOption(label="Custom", value="Custom"),
+        ]
+        super().__init__(placeholder="Jump to a rarity...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view_ref.rarity = self.values[0]
+        self.view_ref.page = 0
+        await interaction.response.edit_message(embed=self.view_ref.current_embed(), view=self.view_ref)
+
+class CardsPaginationView(discord.ui.View):
+    def __init__(self, grouped_cards, rarity="Common"):
+        super().__init__(timeout=180)
+        self.grouped_cards = grouped_cards
+        self.rarity = rarity
+        self.page = 0
+        self.add_item(CardRaritySelect(self))
+
+    def total_pages(self):
+        cards_for_rarity = self.grouped_cards.get(self.rarity, [])
+        return max(1, (len(cards_for_rarity) + 9) // 10)
+
+    def current_embed(self):
+        return build_cards_page_embed(self.grouped_cards, self.rarity, self.page)
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = (self.page - 1) % self.total_pages()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = (self.page + 1) % self.total_pages()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+def build_inventory_embed(title_text, summary_text, rows, page, per_page=10):
+    total_pages = max(1, (len(rows) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+
+    start_index = page * per_page
+    page_rows = rows[start_index:start_index + per_page]
+
+    if not rows:
+        card_text = "No cards yet."
+    else:
+        card_lines = []
+        for r in page_rows:
+            limited_note = "" if r["is_active"] else " *(unobtainable)*"
+            card_lines.append(f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({format_card_type(r)}) x{r['amount']}{limited_note}")
+        card_text = "\n".join(card_lines)
+
+    embed = discord.Embed(
+        title=title_text,
+        description=summary_text + "\n**Cards**\n" + card_text,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=INVENTORY_ICON_URL)
+    embed.set_footer(text=f"Cards page {page + 1}/{total_pages}")
+    return embed
+
+class InventoryPaginationView(discord.ui.View):
+    def __init__(self, title_text, summary_text, rows):
+        super().__init__(timeout=180)
+        self.title_text = title_text
+        self.summary_text = summary_text
+        self.rows = rows
+        self.page = 0
+
+    def total_pages(self):
+        return max(1, (len(self.rows) + 9) // 10)
+
+    def current_embed(self):
+        return build_inventory_embed(self.title_text, self.summary_text, self.rows, self.page)
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def previous_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = (self.page - 1) % self.total_pages()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.page = (self.page + 1) % self.total_pages()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -4387,7 +4500,7 @@ async def leaderboard(interaction: discord.Interaction):
         place = place_emojis.get(index, f"#{index}")
         user_mention = f"<@{row['user_id']}>"
         title = await get_title(row["user_id"])
-        title_text = f" {title}" if title else ""
+        title_text = f" **{title}**" if title else ""
         custom_emoji = await get_user_custom_emoji(row["user_id"])
         emoji_text = f" {custom_emoji}" if custom_emoji else ""
         text += f"{place} {user_mention}{emoji_text}{title_text}\n"
@@ -4649,18 +4762,18 @@ async def opencrate(
 @app_commands.autocomplete(card=all_active_cards_autocomplete)
 async def viewcard(interaction: discord.Interaction, card: str):
     c = await get_card_by_ref(card)
+
     if not c:
         return await interaction.response.send_message("Not found.", ephemeral=True)
+
     active_text = "Currently obtainable" if c["is_active"] else "Unobtainable / limited"
-    custom_type = get_record_value(c, "custom_type")
-    custom_type_text = f"\n**Type:** {custom_type}" if c["rarity"] == "Custom" and custom_type else ""
+    rarity_text = format_card_type(c)
 
     embed = discord.Embed(
         title=c["name"],
         description=(
             f"**ID:** {c['id']}\n"
-            f"**Rarity:** {c['rarity']}"
-            f"{custom_type_text}\n"
+            f"**Rarity:** {rarity_text}\n"
             f"**Status:** {active_text}"
         ),
         color=get_color(c["rarity"])
@@ -4671,29 +4784,30 @@ async def viewcard(interaction: discord.Interaction, card: str):
 @bot.tree.command(name="cards", description="View all currently obtainable cards.")
 async def cards(interaction: discord.Interaction):
     all_cards = await get_active_cards()
+
     if not all_cards:
         return await interaction.response.send_message("There are no obtainable cards right now.")
+
     grouped = {}
+
     for c in all_cards:
         grouped.setdefault(c["rarity"], []).append(c)
-    text = ""
+
+    starting_rarity = "Common"
+
     for rarity in ["Common", "Rare", "Epic", "Legendary", "Custom"]:
-        if rarity in grouped:
-            text += f"**{rarity}**\n"
-            for card in grouped[rarity]:
-                custom_type_text = f" • {get_record_value(card, 'custom_type')}" if card["rarity"] == "Custom" and get_record_value(card, "custom_type") else ""
-                text += f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({card['rarity']}{custom_type_text})\n"
-            text += "\n"
-    embed = discord.Embed(
-        title="Currently Obtainable Cards",
-        description=text,
-        color=discord.Color.from_str("#9e659d")
-    )
-    await interaction.response.send_message(embed=embed)
+        if grouped.get(rarity):
+            starting_rarity = rarity
+            break
+
+    view = CardsPaginationView(grouped, starting_rarity)
+
+    await interaction.response.send_message(embed=view.current_embed(), view=view)
 
 @bot.tree.command(name="inventory", description="View your inventory or another user's inventory.")
 async def inventory(interaction: discord.Interaction, user: discord.Member = None):
     user = user or interaction.user
+
     bal = await get_balance(user.id)
     regular_crates, legendary_crates = await get_loot_crates(user.id)
     regular_snipers, legendary_snipers = await get_snipe_items(user.id)
@@ -4702,7 +4816,10 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     custom_emoji = await get_user_custom_emoji(user.id)
     owned_profile_emojis = await get_user_owned_profile_emojis(user.id)
     owned_titles = await get_user_owned_titles(user.id)
+
     emoji_text = f" {custom_emoji}" if custom_emoji else ""
+    title_text = f" {title}" if title else ""
+
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active, COUNT(*) as amount
@@ -4712,45 +4829,35 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
             GROUP BY cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active
             ORDER BY cards.rarity, cards.id
         """, user.id)
-    text = f"**Balance:** {format_coins(bal)}\n"
-    text += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
-    text += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n"
+
+    summary = f"**Balance:** {format_coins(bal)}\n"
+    summary += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
+    summary += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n"
 
     if regular_snipers > 0:
-        text += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
+        summary += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
 
     if legendary_snipers > 0:
-        text += f"{BULLET_EMOJI} {LEGENDARY_SNIPER_EMOJI} **Legendary Snipers:** {legendary_snipers}\n"
+        summary += f"{BULLET_EMOJI} {LEGENDARY_SNIPER_EMOJI} **Legendary Snipers:** {legendary_snipers}\n"
+
+    summary += f"\n**Active Perks**\n{format_active_boosts(active_boosts)}\n"
 
     if owned_profile_emojis:
-        text += "\n**Owned Profile Emojis**\n"
-
+        summary += "\n**Owned Profile Emojis**\n"
         for owned_emoji in owned_profile_emojis:
-            text += f"{BULLET_EMOJI} {owned_emoji['emoji']} `{owned_emoji['name']}`\n"
+            summary += f"{BULLET_EMOJI} {owned_emoji['emoji']} `{owned_emoji['name']}`\n"
 
     if owned_titles:
-        text += "\n**Owned Titles**\n"
-
+        summary += "\n**Owned Titles**\n"
         for owned_title in owned_titles:
-            text += f"{BULLET_EMOJI} `{owned_title}`\n"
+            summary += f"{BULLET_EMOJI} **{owned_title}**\n"
 
-    text += "\n"
-    if not rows:
-        text += "No cards yet."
-    else:
-        for r in rows:
-            limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            custom_type_text = f" • {get_record_value(r, 'custom_type')}" if r["rarity"] == "Custom" and get_record_value(r, "custom_type") else ""
-            text += f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({r['rarity']}{custom_type_text}) x{r['amount']}{limited_note}\n"
-    inventory_title = f"{title} {user.display_name}{emoji_text}'s Inventory" if title else f"{user.display_name}{emoji_text}'s Inventory"
-    embed = discord.Embed(
-        title=inventory_title,
-        description=text,
-        color=discord.Color.from_str("#9e659d")
-    )
-    embed.set_thumbnail(url=INVENTORY_ICON_URL)
+    summary += "\n"
 
-    await interaction.response.send_message(embed=embed)
+    inventory_title = f"{user.display_name}{emoji_text}{title_text}'s Inventory"
+    view = InventoryPaginationView(inventory_title, summary, rows)
+
+    await interaction.response.send_message(embed=view.current_embed(), view=view)
 
 @bot.tree.command(name="trade", description="Trade cards with another user.")
 @app_commands.describe(
