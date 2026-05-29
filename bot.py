@@ -1239,8 +1239,14 @@ async def create_profile_emoji_shop_embed():
 
     return embed
 
+def plain_card_label(card):
+    return f"ID {card['id']} • {card['name']}"
+
+def plain_card_label_with_rarity(card):
+    return f"ID {card['id']} • {card['name']} ({format_card_type(card)})"
+
 def card_label(card):
-    return f"**ID:** `{card['id']}` {card['name']} ({card['rarity']})"
+    return f"**ID:** `{card['id']}` {card['name']} ({format_card_type(card)})"
 
 def format_card_line(card, amount=None, limited_note=""):
     amount_text = f" x{amount}" if amount is not None else ""
@@ -2155,7 +2161,7 @@ async def choose_legendary_crate_card(user_id=None):
 async def your_cards_autocomplete(interaction: discord.Interaction, current: str):
     cards = await get_user_active_cards(interaction.user.id)
     return [
-        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        app_commands.Choice(name=plain_card_label(card), value=str(card["id"]))
         for card in cards
         if current.lower() in card_label(card).lower()
     ][:25]
@@ -2163,7 +2169,7 @@ async def your_cards_autocomplete(interaction: discord.Interaction, current: str
 async def sell_cards_autocomplete(interaction: discord.Interaction, current: str):
     cards = await get_user_owned_cards_for_sell(interaction.user.id)
     return [
-        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        app_commands.Choice(name=plain_card_label(card), value=str(card["id"]))
         for card in cards
         if current.lower() in card_label(card).lower()
     ][:25]
@@ -2171,7 +2177,7 @@ async def sell_cards_autocomplete(interaction: discord.Interaction, current: str
 async def all_active_cards_autocomplete(interaction: discord.Interaction, current: str):
     cards = await get_active_cards()
     return [
-        app_commands.Choice(name=card_label(card), value=str(card["id"]))
+        app_commands.Choice(name=plain_card_label(card), value=str(card["id"]))
         for card in cards
         if current.lower() in card_label(card).lower()
     ][:25]
@@ -4944,24 +4950,61 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
 
     await interaction.response.send_message(embed=view.current_embed(), view=view)
 
-@bot.tree.command(name="trade", description="Trade cards with another user.")
+@bot.tree.command(name="trade", description="Trade one card with another user.")
 @app_commands.describe(
-    user="Trade with",
-    your_card="Card you're offering",
-    their_card="Card you want"
+    user="User you want to trade with",
+    your_card="Card you are offering",
+    their_card="Card you want from them"
 )
-@app_commands.autocomplete(
-    your_card=your_cards_autocomplete,
-    their_card=all_active_cards_autocomplete
-)
-async def trade(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    your_card: str,
-    their_card: str
-):
+@app_commands.autocomplete(your_card=user_cards_autocomplete, their_card=all_cards_autocomplete)
+async def trade(interaction: discord.Interaction, user: discord.Member, your_card: str, their_card: str):
+    await interaction.response.defer()
+
     if user.bot:
-        return await interaction.response.send_message(embed=view.create_embed(), view=view)
+        return await interaction.followup.send("You cannot trade with bots.", ephemeral=True)
+
+    if user.id == interaction.user.id:
+        return await interaction.followup.send("You cannot trade with yourself.", ephemeral=True)
+
+    your_card_data = await get_card_by_ref(your_card)
+    their_card_data = await get_card_by_ref(their_card)
+
+    if not your_card_data:
+        return await interaction.followup.send("Your offered card was not found.", ephemeral=True)
+
+    if not their_card_data:
+        return await interaction.followup.send("The requested card was not found.", ephemeral=True)
+
+    if your_card_data["id"] in active_trade_card_ids or their_card_data["id"] in active_trade_card_ids:
+        return await interaction.followup.send("One of those cards is already in an active trade.", ephemeral=True)
+
+    if not await user_owns_card(interaction.user.id, your_card_data["id"]):
+        return await interaction.followup.send("You do not own the card you are trying to offer.", ephemeral=True)
+
+    if not await user_owns_card(user.id, their_card_data["id"]):
+        return await interaction.followup.send(f"{user.display_name} does not own the card you requested.", ephemeral=True)
+
+    requester_trade_usage = await get_daily_limit_row(interaction.user.id, "trade")
+    target_trade_usage = await get_daily_limit_row(user.id, "trade")
+
+    if requester_trade_usage["count_value"] >= MAX_TRADES_PER_DAY:
+        return await interaction.followup.send(
+            f"You have reached your daily trade limit of **{MAX_TRADES_PER_DAY}** trades.",
+            ephemeral=True
+        )
+
+    if target_trade_usage["count_value"] >= MAX_TRADES_PER_DAY:
+        return await interaction.followup.send(
+            f"{user.display_name} has reached their daily trade limit of **{MAX_TRADES_PER_DAY}** trades.",
+            ephemeral=True
+        )
+
+    active_trade_card_ids.add(your_card_data["id"])
+    active_trade_card_ids.add(their_card_data["id"])
+
+    view = TradeView(interaction.user, user, your_card_data, their_card_data)
+
+    await interaction.followup.send(embed=view.create_embed(), view=view)
 
 @bot.tree.command(name="addcard", description="Staff only: add or reactivate a collectible card.")
 @app_commands.default_permissions(manage_messages=True)
