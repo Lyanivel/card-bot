@@ -95,6 +95,17 @@ DAILY_CLAIM_MESSAGES = [
     "Your reward for existing: {amount} Sancs.",
 ]
 
+WEEKLY_CLAIM_MESSAGES = [
+    "Another week, another reward.",
+    "Let's see if the wait was worth it.",
+    "A week's worth of patience pays off.",
+    "Seven days later...",
+    "Let's find out what fate had planned this week.",
+    "You survived another week. Barely.",
+    "Congratulations! You remembered to claim it.",
+    "We kept this crate warm for you.",
+]
+
 LOOT_CRATE_OPEN_MESSAGES = [
     "You crack open a loot crate...",
     "Let's see what fate has in store.",
@@ -1236,7 +1247,7 @@ def create_shop_embed():
             emoji = get_shop_item_emoji(item)
             emoji_text = f"{emoji} " if emoji else ""
             if item.get("price", 0) > 0:
-                price_text = f" [{format_coins(item['price'])}]"
+                price_text = f" **{format_coins(item['price'])}**"
             else:
                 price_text = ""
             text += f"{BULLET_EMOJI} {emoji_text}`{item['name']}`{price_text}\n"
@@ -1264,7 +1275,7 @@ def create_shop_item_embed(item_key):
         details += f"{BULLET_EMOJI} Staff must fulfill Goos manually\n"
         details += "Choose an amount from the dropdown below."
     else:
-        details = f"**Price:** [{format_coins(item['price'])}]\n"
+        details = f"**Price:** **{format_coins(item['price'])}**\n"
         details += f"**Info:** {item['description']}\n\n"
 
         if item.get("crate_type") == "regular":
@@ -1372,10 +1383,9 @@ async def create_title_shop_embed():
 
         for price in sorted(grouped.keys()):
             lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
-            lines.append("")
 
             for row in grouped[price]:
-                lines.append(f"{BULLET_EMOJI} **{row['title']}**")
+                lines.append(f"{BULLET_EMOJI} {row['title']}")
 
             lines.append("")
 
@@ -1432,10 +1442,10 @@ def plain_card_label(card):
     return f"ID {card['id']} • {card['name']}"
 
 def plain_card_label_with_rarity(card):
-    return f"ID {card['id']} • {card['name']} ({format_card_type(card)})"
+    return f"ID {card['id']} • {card['name']} ({format_card_type_public(card)})"
 
 def card_label(card):
-    return f"**ID:** `{card['id']}` {card['name']} ({format_card_type(card)})"
+    return f"**ID:** `{card['id']}` {card['name']} ({format_card_type_public(card)})"
 
 def format_card_line(card, amount=None, limited_note=""):
     amount_text = f" x{amount}" if amount is not None else ""
@@ -1456,8 +1466,22 @@ def format_card_type(card):
         return f"Custom • {custom_type}"
     return rarity
 
+def format_card_type_public(card):
+    rarity = get_record_value(card, "rarity", "Unknown")
+    custom_type = get_record_value(card, "custom_type")
+
+    if rarity == "Custom":
+        if custom_type:
+            return f"Limited • {custom_type}"
+        return "Limited"
+
+    return rarity
+
+def display_rarity_name(rarity):
+    return "Limited" if rarity == "Custom" else rarity
+
 def trade_card_display(card):
-    return f"**{card['name']}**\n**ID:** `{card['id']}`\n**Rarity:** {format_card_type(card)}"
+    return f"**{card['name']}**\n**ID:** `{card['id']}`\n**Rarity:** {format_card_type_public(card)}"
 
 def trade_card_inline(card):
     return f"**{card['name']}** (**ID:** `{card['id']}`)"
@@ -1470,7 +1494,7 @@ def create_card_embed(card):
     drop_message = choose_drop_message(card["rarity"])
 
     embed = discord.Embed(
-        title=f"{card_type} Card Drop!",
+        title=f"{format_card_type_public(card)} Card Drop!",
         description=f"{drop_message}\n\n**{card['name']}** appeared!\n**ID:** `{card['id']}`",
         color=get_color(card["rarity"])
     )
@@ -4148,7 +4172,7 @@ async def create_eventsetup_home_embed(guild_id):
     embed.add_field(
         name="Event Features",
         value=(
-            f"**Event-Only Drops:** {drops_text}\n"
+            f"**Event Drops:** {drops_text}\n"
             f"**Event Boosts:** {boosts_text}\n"
             f"**Boost Amount:** +{EVENT_REWARD_BOOST_PERCENT}% to `/daily` and `/weekly` while launched"
         ),
@@ -4182,7 +4206,7 @@ def create_eventsetup_info_embed(category):
             f"{BULLET_EMOJI} Immunity\n\n"
             "`/addcard name:Sneak Attack rarity:Custom custom_type:Sabotage image:URL`"
         )
-    elif category == "Event-Only Drops":
+    elif category == "Event Drops":
         embed.description = (
             "When this is enabled and the event is launched, auto drops only pull from **Custom** cards.\n\n"
             "This is useful for:\n"
@@ -4243,7 +4267,7 @@ class EventSetupSelect(discord.ui.Select):
             discord.SelectOption(label="Set Event Theme", value="set_theme", description="Change the event theme"),
             discord.SelectOption(label="Set Event Type", value="set_type", description="Seasonal, Mafia Tourney, Team Games, etc."),
             discord.SelectOption(label="Custom Cards Info", value="Custom Cards", description="How custom event cards work"),
-            discord.SelectOption(label="Event-Only Drops Info", value="Event-Only Drops", description="How event-only drops work"),
+            discord.SelectOption(label="Event Drops Info", value="Event Drops", description="How event drops work"),
             discord.SelectOption(label="Event Boosts Info", value="Event Boosts", description="How event boosts work"),
             discord.SelectOption(label="Event Types Info", value="Event Types", description="Suggested event types"),
         ]
@@ -4313,7 +4337,7 @@ class EventSetupView(discord.ui.View):
 
         await send_staff_log(
             interaction.guild,
-            "Event-Only Drops Updated",
+            "Event Drops Updated",
             f"**New value:** {'Enabled' if new_value else 'Disabled'}\n**Updated by:** {interaction.user.mention}",
             discord.Color.from_str("#9e659d")
         )
@@ -4367,7 +4391,7 @@ def build_cards_page_embed(grouped_cards, rarity, page, per_page=10):
     else:
         lines = []
         for card in page_cards:
-            lines.append(f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({format_card_type(card)})")
+            lines.append(f"{BULLET_EMOJI} **ID:** `{card['id']}` {card['name']} ({format_card_type_public(card)})")
         description = "\n".join(lines)
 
     embed = discord.Embed(
@@ -4433,7 +4457,7 @@ def build_inventory_embed(title_text, summary_text, rows, page, per_page=10):
         card_lines = []
         for r in page_rows:
             limited_note = "" if r["is_active"] else " *(unobtainable)*"
-            card_lines.append(f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({format_card_type(r)}) x{r['amount']}{limited_note}")
+            card_lines.append(f"{BULLET_EMOJI} **ID:** `{r['id']}` {r['name']} ({format_card_type_public(r)}) x{r['amount']}{limited_note}")
         card_text = "\n".join(card_lines)
 
     embed = discord.Embed(
@@ -4468,6 +4492,25 @@ class InventoryPaginationView(discord.ui.View):
     async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.page = (self.page + 1) % self.total_pages()
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+async def profile_emoji_shop_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+
+    rows = await get_active_profile_emojis()
+    choices = []
+
+    for row in rows:
+        label = f"{row['name']} {row['emoji']}"
+
+        if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(row["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
 
 # ---------------- BOT ----------------
 class Bot(discord.Client):
@@ -4613,7 +4656,7 @@ async def daily(interaction: discord.Interaction):
     if found_crate:
         await add_loot_crate(user_id, "regular", 1)
 
-    daily_message = random.choice(DAILY_CLAIM_MESSAGES).format(amount=format_coins(total))
+    daily_message = random.choice(DAILY_CLAIM_MESSAGES).format(amount=f"**{format_coins(total)}**")
     message = f"{CURRENCY_EMOJI} | {daily_message}"
 
     if streak >= 3:
@@ -4633,7 +4676,6 @@ async def daily(interaction: discord.Interaction):
 
     await interaction.response.send_message(message)
 
-
 @bot.tree.command(name="weekly", description="Claim your weekly reward and Loot Crate.")
 async def weekly(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -4650,6 +4692,8 @@ async def weekly(interaction: discord.Interaction):
             f"You already claimed your weekly. Try again in {days}d {hours}h.",
             ephemeral=True
         )
+
+    weekly_message = f"{weekly_message}\n" +  random.choice(WEEKLY_CLAIM_MESSAGES)
 
     await interaction.response.send_message(
         f"{WEEKLY_BOX_EMOJI} | Your Weekly Box is unsealing!"
@@ -5074,7 +5118,7 @@ async def viewcard(interaction: discord.Interaction, card: str):
         return await interaction.response.send_message(EVENT_CARD_LOCKED_MESSAGE, ephemeral=True)
 
     active_text = "Currently obtainable" if c["is_active"] else "Unobtainable / limited"
-    rarity_text = format_card_type(c)
+    rarity_text = format_card_type_public(c)
 
     embed = discord.Embed(
         title=c["name"],
@@ -5511,6 +5555,7 @@ async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: st
 @bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(name="Profile emoji name to remove")
+@app_commands.autocomplete(emoji=profile_emoji_shop_autocomplete)
 async def removeprofileemoji(interaction: discord.Interaction, name: str):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
@@ -6082,6 +6127,77 @@ async def raritychances(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="settingsedit", description="Admin only: quickly edit common bot settings.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(setting="The setting to edit", value="The new number value")
+@app_commands.choices(
+    setting=[
+        app_commands.Choice(name="Drop Chance", value="drop_chance"),
+        app_commands.Choice(name="Drop Minutes", value="drop_minutes"),
+        app_commands.Choice(name="Claim Cooldown", value="claim_cooldown"),
+        app_commands.Choice(name="Common Rarity Chance", value="common_chance"),
+        app_commands.Choice(name="Rare Rarity Chance", value="rare_chance"),
+        app_commands.Choice(name="Epic Rarity Chance", value="epic_chance"),
+        app_commands.Choice(name="Legendary Rarity Chance", value="legendary_chance"),
+        app_commands.Choice(name="Limited Rarity Chance", value="custom_chance"),
+        app_commands.Choice(name="Daily Minimum", value="daily_min"),
+        app_commands.Choice(name="Daily Maximum", value="daily_max"),
+        app_commands.Choice(name="Weekly Minimum", value="weekly_min"),
+        app_commands.Choice(name="Weekly Maximum", value="weekly_max"),
+        app_commands.Choice(name="Regular Crate Minimum", value="regular_crate_min"),
+        app_commands.Choice(name="Regular Crate Maximum", value="regular_crate_max"),
+        app_commands.Choice(name="Legendary Crate Minimum", value="legendary_crate_min"),
+        app_commands.Choice(name="Legendary Crate Maximum", value="legendary_crate_max"),
+        app_commands.Choice(name="Legendary Bonus Card Chance", value="legendary_second_card_chance"),
+    ]
+)
+async def settingsedit(interaction: discord.Interaction, setting: app_commands.Choice[str], value: int):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+    if value < 0:
+        return await interaction.response.send_message("Value cannot be negative.", ephemeral=True)
+
+    rarity_settings = {"common_chance", "rare_chance", "epic_chance", "legendary_chance", "custom_chance"}
+    economy_settings = {"daily_min", "daily_max", "weekly_min", "weekly_max"}
+    crate_settings = {
+        "regular_crate_min",
+        "regular_crate_max",
+        "legendary_crate_min",
+        "legendary_crate_max",
+        "legendary_second_card_chance",
+    }
+
+    if setting.value == "drop_chance":
+        if value > 100:
+            return await interaction.response.send_message("Drop chance must be between 0 and 100.", ephemeral=True)
+        await set_auto_drop_chance_db(interaction.guild.id, value)
+    elif setting.value == "drop_minutes":
+        await set_auto_drop_minutes_db(interaction.guild.id, value)
+    elif setting.value == "claim_cooldown":
+        await set_claim_cooldown_db(interaction.guild.id, value)
+    elif setting.value in rarity_settings:
+        if value > 100:
+            return await interaction.response.send_message("Rarity chance must be between 0 and 100.", ephemeral=True)
+        await set_rarity_setting_db(interaction.guild.id, setting.value, value)
+    elif setting.value in economy_settings:
+        await set_economy_setting_db(interaction.guild.id, setting.value, value)
+    elif setting.value in crate_settings:
+        if "chance" in setting.value and value > 100:
+            return await interaction.response.send_message("Chance must be between 0 and 100.", ephemeral=True)
+        await set_crate_setting_db(interaction.guild.id, setting.value, value)
+    else:
+        return await interaction.response.send_message("Unknown setting.", ephemeral=True)
+
+    await send_staff_log(
+        interaction.guild,
+        "Setting Updated",
+        f"**Setting:** {setting.name}\n**New value:** {value}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(f"Updated **{setting.name}** to **{value}**.", ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
