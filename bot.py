@@ -79,6 +79,92 @@ SNIPE_MUTE_MINUTES = 5
 MAX_TRADES_PER_DAY = 5
 MAX_GIVECURRENCY_PER_DAY = 25000
 MAX_GIVECURRENCY_PER_TRANSFER = 10000
+
+DAILY_CLAIM_MESSAGES = [
+    "You shook the money tree and found {amount} Sancs.",
+    "You checked under the couch cushions and found {amount} Sancs.",
+    "The Sanction treasury grants you {amount} Sancs.",
+    "Another day, another sanc! {amount}",
+    "Take your Sancs and go!",
+    "You found {amount} Sancs. Please stop looking for more.",
+    "Congratulations. You are now {amount} Sancs richer.",
+    "You discovered {amount} Sancs hiding in plain sight.",
+    "The treasury sighs and gives you {amount} Sancs.",
+    "Someone left {amount} Sancs unattended. They're yours now.",
+    "You got {amount} Sancs. Don't spend it all in one place.",
+    "Your reward for existing: {amount} Sancs.",
+]
+
+LOOT_CRATE_OPEN_MESSAGES = [
+    "You crack open a loot crate...",
+    "Let's see what fate has in store.",
+    "You unlock the crate and peek inside.",
+    "The crate creaks open.",
+    "Fingers crossed.",
+    "Whatever happens next is between you and fate.",
+    "The crate opens. Good luck.",
+]
+
+CARD_DROP_MESSAGES = [
+    "A mysterious card has appeared!",
+    "A new discovery has surfaced.",
+    "Fortune has revealed a card.",
+    "Something valuable has appeared.",
+    "Opportunity knocks. Who will answer?",
+    "Finders keepers!",
+    "A card has wandered into the chat.",
+]
+
+RARE_CARD_DROP_MESSAGES = [
+    "A rare find has been spotted!",
+    "Something rare is waiting to be claimed.",
+]
+
+SNIPE_HIT_MESSAGES = [
+    "Bullseye!",
+    "Direct hit!",
+    "A perfect shot!",
+    "Yoink!",
+    "Fastest fingers in the west.",
+    "Skill issue for everyone else.",
+    "Right between the eyes.",
+]
+
+SNIPE_MISS_ROTATING_MESSAGES = [
+    "Not even close.",
+    "The sniper found absolutely nothing.",
+    "Wrong place, wrong time.",
+    "The sniper checks the area. Nothing.",
+    "The target remains one step ahead.",
+    "Have you tried opening your eyes?",
+    "The target thanks you for checking the wrong spot.",
+]
+
+SNIPE_HIDE_SUCCESS_MESSAGES = [
+    "Safe... for now.",
+    "Your location remains unknown.",
+    "The sniper walks right past.",
+    "Your hiding spot held strong.",
+    "Even we're surprised they didn't find you.",
+    "The sniper needs glasses.",
+    "Somehow, it worked.",
+    "You're either lucky or invisible.",
+    "Hide and seek champion.",
+]
+
+SNIPE_FOUND_MESSAGES = [
+    "Your hiding place has been compromised.",
+    "Your cover is blown.",
+    "The sniper found their mark.",
+    "The sniper found you!",
+    "You really thought that would work?",
+    "The sniper found you immediately.",
+    "The bushes sold you out.",
+    "Hiding is harder than it looks.",
+    "You got caught in 4K.",
+]
+
+EVENT_CARD_LOCKED_MESSAGE = "This event card belongs to a chosen few."
 OWNER_PROTECTION_MESSAGES = [
     "{target} SHOULD have been muted. Discord chose peace instead of violence.",
     "{target} was eliminated spiritually because Discord refused the paperwork.",
@@ -87,17 +173,11 @@ OWNER_PROTECTION_MESSAGES = [
 ]
 
 SNIPE_SUCCESS_MESSAGES = [
-    "{target} got caught lacking, pack it up immediately!",
-    "{target} never even saw it coming.",
-    "{target}? Folded instantly.",
-    "{target}, geesh you should’ve hid better!",
+    "{message} {target}",
 ]
 
 SNIPE_MISS_MESSAGES = [
-    "{target} escaped safely. Haha you missed!",
-    "{target} escaped. That shot needs to be investigated.",
-    "{target} escaped while {sniper} hit absolutely nothing.",
-    "{target} escaped and immediately started talking trash.",
+    "{message} {target}",
 ]
 # Optional: paste direct Discord/CDN image links here later for shop item thumbnails.
 # The images you uploaded to ChatGPT cannot be used directly by the bot on Railway.
@@ -232,6 +312,14 @@ async def setup_database():
         await conn.execute("""
             ALTER TABLE cards
             ADD COLUMN IF NOT EXISTS custom_type TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE cards
+            ADD COLUMN IF NOT EXISTS event_name TEXT;
+        """)
+        await conn.execute("""
+            ALTER TABLE cards
+            ADD COLUMN IF NOT EXISTS is_event_card BOOLEAN NOT NULL DEFAULT FALSE;
         """)
         await conn.execute("""
             UPDATE cards
@@ -449,6 +537,16 @@ async def setup_database():
                 legendary_crate_max INTEGER NOT NULL DEFAULT 1500,
                 legendary_second_card_chance INTEGER NOT NULL DEFAULT 20,
                 claim_loot_crate_chance INTEGER NOT NULL DEFAULT 5
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS rarity_settings (
+                guild_id BIGINT PRIMARY KEY,
+                common_chance INTEGER NOT NULL DEFAULT 70,
+                rare_chance INTEGER NOT NULL DEFAULT 20,
+                epic_chance INTEGER NOT NULL DEFAULT 8,
+                legendary_chance INTEGER NOT NULL DEFAULT 2,
+                custom_chance INTEGER NOT NULL DEFAULT 0
             );
         """)
 
@@ -804,6 +902,97 @@ async def set_crate_setting_db(guild_id, column, value: int):
             value,
             guild_id
         )
+
+async def get_rarity_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT common_chance, rare_chance, epic_chance, legendary_chance, custom_chance
+            FROM rarity_settings
+            WHERE guild_id=$1
+        """, guild_id)
+
+        if not row:
+            await conn.execute("""
+                INSERT INTO rarity_settings (guild_id, common_chance, rare_chance, epic_chance, legendary_chance, custom_chance)
+                VALUES ($1, 70, 20, 8, 2, 0)
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id)
+
+            return {
+                "common_chance": 70,
+                "rare_chance": 20,
+                "epic_chance": 8,
+                "legendary_chance": 2,
+                "custom_chance": 0,
+            }
+
+        return dict(row)
+
+async def set_rarity_setting_db(guild_id, column, value: int):
+    allowed_columns = {
+        "common_chance",
+        "rare_chance",
+        "epic_chance",
+        "legendary_chance",
+        "custom_chance",
+    }
+
+    if column not in allowed_columns:
+        raise ValueError("Invalid rarity setting.")
+
+    await get_rarity_settings(guild_id)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE rarity_settings SET {column}=$1 WHERE guild_id=$2",
+            value,
+            guild_id
+        )
+
+def choose_rarity_from_settings(settings, allowed_rarities=None):
+    weights = {
+        "Common": int(settings.get("common_chance", 70)),
+        "Rare": int(settings.get("rare_chance", 20)),
+        "Epic": int(settings.get("epic_chance", 8)),
+        "Legendary": int(settings.get("legendary_chance", 2)),
+        "Custom": int(settings.get("custom_chance", 0)),
+    }
+
+    if allowed_rarities is not None:
+        weights = {rarity: weight for rarity, weight in weights.items() if rarity in allowed_rarities}
+
+    weights = {rarity: max(0, weight) for rarity, weight in weights.items()}
+
+    if not weights or sum(weights.values()) <= 0:
+        fallback = allowed_rarities[0] if allowed_rarities else "Common"
+        return fallback
+
+    return random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
+
+async def choose_card_from_pool(cards, guild_id=None):
+    if not cards:
+        return None
+
+    if not guild_id:
+        return random.choice(cards)
+
+    rarity_settings = await get_rarity_settings(guild_id)
+    available_rarities = sorted(set(card["rarity"] for card in cards))
+
+    for _ in range(12):
+        chosen_rarity = choose_rarity_from_settings(rarity_settings, available_rarities)
+        rarity_cards = [card for card in cards if card["rarity"] == chosen_rarity]
+
+        if rarity_cards:
+            return random.choice(rarity_cards)
+
+    return random.choice(cards)
+
+def choose_drop_message(rarity):
+    if rarity in ("Rare", "Epic", "Legendary", "Custom") and random.randint(1, 100) <= 45:
+        return random.choice(RARE_CARD_DROP_MESSAGES)
+
+    return random.choice(CARD_DROP_MESSAGES)
 
 async def get_event_settings(guild_id):
     async with db_pool.acquire() as conn:
@@ -1278,10 +1467,11 @@ def clean_card_ref(card_ref: str):
 
 def create_card_embed(card):
     card_type = format_card_type(card)
+    drop_message = choose_drop_message(card["rarity"])
 
     embed = discord.Embed(
         title=f"{card_type} Card Drop!",
-        description=f"**{card['name']}** appeared!\n**ID:** `{card['id']}`",
+        description=f"{drop_message}\n\n**{card['name']}** appeared!\n**ID:** `{card['id']}`",
         color=get_color(card["rarity"])
     )
 
@@ -4385,43 +4575,64 @@ async def daily(interaction: discord.Interaction):
     user_id = interaction.user.id
     economy_settings = await get_economy_settings(interaction.guild.id)
     today = eastern_day_number()
+
     async with db_pool.acquire() as conn:
         last_claim_day = await conn.fetchval(
             "SELECT last_claim_day FROM daily_streaks WHERE user_id=$1",
             user_id
         )
+
     if last_claim_day == today:
         return await interaction.response.send_message(
             "You already claimed your daily today. Daily resets at midnight Eastern.",
             ephemeral=True
         )
+
     amount = random.randint(int(economy_settings["daily_min"]), int(economy_settings["daily_max"]))
+
+    event_multiplier = await get_event_reward_multiplier(interaction.guild.id if interaction.guild else None)
+    if event_multiplier > 1:
+        amount = int(amount * event_multiplier)
+
     streak = await update_daily_streak(user_id)
     bonus = 0
+
     if streak % int(economy_settings["daily_streak_bonus_every"]) == 0:
         bonus = int(economy_settings["daily_streak_bonus_amount"])
+
     found_crate = random.randint(1, 100) <= int(economy_settings["daily_loot_crate_chance"])
     boost_bonus = 0
+
     if await get_active_boost(user_id, "daily"):
         boost_bonus = int(amount * DAILY_BOOST_PERCENT / 100)
         await clear_boost(user_id, "daily")
+
     total = amount + bonus + boost_bonus
     await add_balance(user_id, total)
+
     if found_crate:
         await add_loot_crate(user_id, "regular", 1)
-    message = (
-        f"{CURRENCY_EMOJI} | Take your Sancs and go! "
-        f"**{total} {CURRENCY_EMOJI}**"
-    )
+
+    daily_message = random.choice(DAILY_CLAIM_MESSAGES).format(amount=format_coins(total))
+    message = f"{CURRENCY_EMOJI} | {daily_message}"
+
     if streak >= 3:
         message += f" [{STREAK_EMOJI} {streak}]"
+
     if bonus > 0:
         message += f"\nMilestone bonus: **{format_coins(bonus)}**"
+
     if boost_bonus > 0:
         message += f"\n{DAILY_BOOST_EMOJI} Daily Boost bonus: **{format_coins(boost_bonus)}**"
+
+    if event_multiplier > 1:
+        message += f"\nActive event bonus applied."
+
     if found_crate:
         message += f"\n{GIFT_BOX_EMOJI} You found a Loot Crate! Use `/opencrate`"
+
     await interaction.response.send_message(message)
+
 
 @bot.tree.command(name="weekly", description="Claim your weekly reward and Loot Crate.")
 async def weekly(interaction: discord.Interaction):
@@ -4841,7 +5052,9 @@ async def opencrate(
     if second_card:
         await add_card_to_inventory(user_id, second_card["id"])
         rewards += f"\n**Bonus Card:** **ID:** `{second_card['id']}` {second_card['name']} ({second_card['rarity']})"
-    embed = discord.Embed(
+    embed = crate_message = random.choice(LOOT_CRATE_OPEN_MESSAGES)
+
+    discord.Embed(
         title=f"{crate_emoji} {crate_name} Opened!",
         description=rewards,
         color=discord.Color.from_str("#9e659d")
@@ -4856,6 +5069,9 @@ async def viewcard(interaction: discord.Interaction, card: str):
 
     if not c:
         return await interaction.response.send_message("Not found.", ephemeral=True)
+
+    if c.get("is_event_card") and not await user_owns_card(interaction.user.id, c["id"]) and not await is_staff_member(interaction):
+        return await interaction.response.send_message(EVENT_CARD_LOCKED_MESSAGE, ephemeral=True)
 
     active_text = "Currently obtainable" if c["is_active"] else "Unobtainable / limited"
     rarity_text = format_card_type(c)
@@ -5167,7 +5383,7 @@ async def dropcard(
             cards = await conn.fetch("SELECT * FROM cards WHERE is_active = TRUE")
     if not cards:
         return await interaction.response.send_message("No cards found for that choice.", ephemeral=True)
-    selected_card = random.choice(cards)
+    selected_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
     await send_staff_log(
         interaction.guild,
         "Manual Card Drop",
@@ -5796,6 +6012,76 @@ async def eventsetup(interaction: discord.Interaction):
         view=EventSetupView(),
         ephemeral=True
     )
+
+@bot.tree.command(name="setraritychance", description="Admin only: edit card rarity drop chances.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    rarity="Rarity to edit",
+    chance="Chance weight. These are weighted values, not required to total 100."
+)
+@app_commands.choices(
+    rarity=[
+        app_commands.Choice(name="Common", value="common_chance"),
+        app_commands.Choice(name="Rare", value="rare_chance"),
+        app_commands.Choice(name="Epic", value="epic_chance"),
+        app_commands.Choice(name="Legendary", value="legendary_chance"),
+        app_commands.Choice(name="Custom", value="custom_chance"),
+    ]
+)
+async def setraritychance(interaction: discord.Interaction, rarity: app_commands.Choice[str], chance: int):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can edit rarity chances.", ephemeral=True)
+
+    if chance < 0 or chance > 100:
+        return await interaction.response.send_message("Chance must be between 0 and 100.", ephemeral=True)
+
+    await set_rarity_setting_db(interaction.guild.id, rarity.value, chance)
+    settings = await get_rarity_settings(interaction.guild.id)
+
+    embed = discord.Embed(
+        title="Rarity Chances Updated",
+        description=(
+            f"**Common:** {settings['common_chance']}\n"
+            f"**Rare:** {settings['rare_chance']}\n"
+            f"**Epic:** {settings['epic_chance']}\n"
+            f"**Legendary:** {settings['legendary_chance']}\n"
+            f"**Custom:** {settings['custom_chance']}\n\n"
+            "These are weighted values, so they do not have to total exactly 100."
+        ),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await send_staff_log(
+        interaction.guild,
+        "Rarity Chance Updated",
+        f"**Rarity:** {rarity.name}\n**New value:** {chance}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="raritychances", description="Staff only: view current card rarity drop chances.")
+@app_commands.default_permissions(manage_messages=True)
+async def raritychances(interaction: discord.Interaction):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    settings = await get_rarity_settings(interaction.guild.id)
+
+    embed = discord.Embed(
+        title="Current Rarity Chances",
+        description=(
+            f"**Common:** {settings['common_chance']}\n"
+            f"**Rare:** {settings['rare_chance']}\n"
+            f"**Epic:** {settings['epic_chance']}\n"
+            f"**Legendary:** {settings['legendary_chance']}\n"
+            f"**Custom:** {settings['custom_chance']}\n\n"
+            "These are weighted values used when selecting random cards."
+        ),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
