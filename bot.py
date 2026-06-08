@@ -1160,6 +1160,12 @@ def get_color(rarity):
 def format_coins(amount: int):
     return f"{CURRENCY_EMOJI} {amount:,}"
 
+def cooldown_ready_timestamp(last_used, cooldown_seconds):
+    return int(last_used) + int(cooldown_seconds)
+
+def cooldown_ready_text(last_used, cooldown_seconds):
+    return f"<t:{cooldown_ready_timestamp(last_used, cooldown_seconds)}:R>"
+
 def format_cooldown_timestamp(last_used, cooldown_seconds):
     ready_at = int(last_used) + int(cooldown_seconds)
     return f"<t:{ready_at}:R>"
@@ -4516,6 +4522,41 @@ async def profile_emoji_shop_autocomplete(interaction: discord.Interaction, curr
 
     return choices
 
+async def get_profile_emoji_by_ref(ref):
+    ref = str(ref).strip()
+
+    async with db_pool.acquire() as conn:
+        if ref.isdigit():
+            row = await conn.fetchrow(
+                "SELECT * FROM profile_emojis WHERE id=$1",
+                int(ref)
+            )
+            if row:
+                return row
+
+        return await conn.fetchrow(
+            "SELECT * FROM profile_emojis WHERE LOWER(name)=LOWER($1) OR emoji=$1",
+            ref
+        )
+
+async def active_card_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    rows = await get_active_cards()
+    choices = []
+
+    for card in rows:
+        label = plain_card_label(card)
+
+        if current and current not in label.lower() and current not in str(card["id"]):
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -4585,17 +4626,83 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message(message, ephemeral=True)
 
 # ---------------- COMMANDS ----------------
-@bot.tree.command(name="settings", description="Admin only: view and edit bot game settings.")
-@app_commands.default_permissions(administrator=True)
+@bot.tree.command(name="settings", description="Staff only: view bot settings and edit instructions.")
+@app_commands.default_permissions(manage_messages=True)
 async def settings(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    await interaction.response.send_message(
-        embed=await create_settings_home_embed(interaction.guild.id),
-        view=SanctionSettingsView(),
-        ephemeral=True
+    drop = await get_drop_settings(interaction.guild.id)
+    economy = await get_economy_settings(interaction.guild.id)
+    crates = await get_crate_settings(interaction.guild.id)
+    rarity = await get_rarity_settings(interaction.guild.id)
+    event = await get_event_settings(interaction.guild.id)
+
+    embed = discord.Embed(
+        title="Bot Settings",
+        description=(
+            "Use `/settingsedit setting:value` to change settings directly.\n"
+            "No pop-up panels needed."
+        ),
+        color=discord.Color.from_str("#9e659d")
     )
+
+    embed.add_field(
+        name="Drops",
+        value=(
+            f"**Enabled:** {format_on_off(drop['auto_drop_enabled'])}\n"
+            f"**Minutes:** {drop['auto_drop_minutes']}\n"
+            f"**Chance:** {drop['auto_drop_chance']}%\n"
+            f"**Claim Cooldown:** {drop['claim_cooldown_seconds']} seconds"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Rarity Chances",
+        value=(
+            f"**Common:** {rarity['common_chance']}\n"
+            f"**Rare:** {rarity['rare_chance']}\n"
+            f"**Epic:** {rarity['epic_chance']}\n"
+            f"**Legendary:** {rarity['legendary_chance']}\n"
+            f"**Limited:** {rarity['custom_chance']}"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Economy",
+        value=(
+            f"**Daily:** {economy['daily_min']} - {economy['daily_max']}\n"
+            f"**Weekly:** {economy['weekly_min']} - {economy['weekly_max']}"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Crates",
+        value=(
+            f"**Regular:** {crates['regular_crate_min']} - {crates['regular_crate_max']}\n"
+            f"**Legendary:** {crates['legendary_crate_min']} - {crates['legendary_crate_max']}\n"
+            f"**Legendary Bonus Card Chance:** {crates['legendary_second_card_chance']}%"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="Event",
+        value=(
+            f"**Name:** {event['event_name']}\n"
+            f"**Theme:** {event['event_theme']}\n"
+            f"**Type:** {event['event_type']}\n"
+            f"**Launched:** {format_on_off(event['event_launched'])}\n"
+            f"**Event Drops:** {format_on_off(event['event_only_drops'])}\n"
+            f"**Event Boosts:** {format_on_off(event['event_boosts_enabled'])}"
+        ),
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="ping", description="Staff only: check if the bot is online.")
 @app_commands.default_permissions(manage_messages=True)
@@ -5056,7 +5163,7 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
         view=view
     )
 
-@bot.tree.command(name="opencrate", description="Open a Loot Crate or Legendary Loot Crate.")
+@bot.tree.command(name="opencrate", description="Open one of your loot crates.")
 @app_commands.describe(crate_type="Choose which crate to open")
 @app_commands.choices(
     crate_type=[
@@ -5064,50 +5171,70 @@ async def snipe(interaction: discord.Interaction, user: discord.Member):
         app_commands.Choice(name="Legendary Loot Crate", value="legendary"),
     ]
 )
-async def opencrate(
-    interaction: discord.Interaction,
-    crate_type: app_commands.Choice[str]
-):
-    user_id = interaction.user.id
-    crate_settings = await get_crate_settings(interaction.guild.id)
-    selected_type = crate_type.value
-    removed = await remove_loot_crate(user_id, selected_type)
-    if not removed:
-        crate_name = "Legendary Loot Crate" if selected_type == "legendary" else "Loot Crate"
-        return await interaction.response.send_message(
-            f"You do not have any **{crate_name}s** to open.",
-            ephemeral=True
-        )
-    if selected_type == "legendary":
-        coins = random.randint(int(crate_settings["legendary_crate_min"]), int(crate_settings["legendary_crate_max"]))
-        first_card = await choose_legendary_crate_card(user_id)
-        second_card = None
-        if random.randint(1, 100) <= int(crate_settings["legendary_second_card_chance"]):
-            second_card = await choose_legendary_crate_card(user_id)
-        crate_emoji = LEGENDARY_CRATE_EMOJI
-        crate_name = "Legendary Loot Crate"
-    else:
-        coins = random.randint(int(crate_settings["regular_crate_min"]), int(crate_settings["regular_crate_max"]))
-        first_card = await choose_regular_crate_card(user_id)
-        second_card = None
-        crate_emoji = LOOT_CRATE_EMOJI
-        crate_name = "Loot Crate"
-    await add_balance(user_id, coins)
-    rewards = f"**Sancs:** {format_coins(coins)}"
-    if first_card:
-        await add_card_to_inventory(user_id, first_card["id"])
-        rewards += f"\n**Card:** **ID:** `{first_card['id']}` {first_card['name']} ({first_card['rarity']})"
-    if second_card:
-        await add_card_to_inventory(user_id, second_card["id"])
-        rewards += f"\n**Bonus Card:** **ID:** `{second_card['id']}` {second_card['name']} ({second_card['rarity']})"
-    embed = crate_message = random.choice(LOOT_CRATE_OPEN_MESSAGES)
+async def opencrate(interaction: discord.Interaction, crate_type: app_commands.Choice[str]):
+    await interaction.response.defer()
 
-    discord.Embed(
-        title=f"{crate_emoji} {crate_name} Opened!",
-        description=rewards,
+    crate_settings = await get_crate_settings(interaction.guild.id)
+    regular_count, legendary_count = await get_loot_crates(interaction.user.id)
+
+    if crate_type.value == "regular" and regular_count <= 0:
+        return await interaction.followup.send("You do not have any Loot Crates.", ephemeral=True)
+
+    if crate_type.value == "legendary" and legendary_count <= 0:
+        return await interaction.followup.send("You do not have any Legendary Loot Crates.", ephemeral=True)
+
+    cards = await get_active_cards()
+
+    if not cards:
+        return await interaction.followup.send("There are no active cards to pull from right now.", ephemeral=True)
+
+    if crate_type.value == "legendary":
+        sancs_amount = random.randint(int(crate_settings["legendary_crate_min"]), int(crate_settings["legendary_crate_max"]))
+        crate_name = "Legendary Loot Crate"
+        crate_emoji = LEGENDARY_CRATE_EMOJI
+        await remove_loot_crate(interaction.user.id, "legendary", 1)
+    else:
+        sancs_amount = random.randint(int(crate_settings["regular_crate_min"]), int(crate_settings["regular_crate_max"]))
+        crate_name = "Loot Crate"
+        crate_emoji = LOOT_CRATE_EMOJI
+        await remove_loot_crate(interaction.user.id, "regular", 1)
+
+    selected_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
+    await add_card_to_inventory(interaction.user.id, selected_card["id"])
+    await add_balance(interaction.user.id, sancs_amount)
+
+    bonus_card_text = ""
+
+    if crate_type.value == "legendary":
+        bonus_chance = int(crate_settings["legendary_second_card_chance"])
+
+        if random.randint(1, 100) <= bonus_chance:
+            bonus_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
+            await add_card_to_inventory(interaction.user.id, bonus_card["id"])
+            bonus_card_text = f"\n{BULLET_EMOJI} Bonus card: **{bonus_card['name']}** (**ID:** `{bonus_card['id']}`)"
+
+    crate_message = random.choice(LOOT_CRATE_OPEN_MESSAGES)
+
+    embed = discord.Embed(
+        title=f"{crate_emoji} {crate_name} Opened",
+        description=(
+            f"{crate_message}\n\n"
+            f"{BULLET_EMOJI} Sancs: **{format_coins(sancs_amount)}**\n"
+            f"{BULLET_EMOJI} Card: **{selected_card['name']}** (**ID:** `{selected_card['id']}`)"
+            f"{bonus_card_text}"
+        ),
         color=discord.Color.from_str("#9e659d")
     )
-    await interaction.response.send_message(embed=embed)
+    embed.set_thumbnail(url=LEGENDARY_CRATE_IMAGE_URL if crate_type.value == "legendary" else LOOT_CRATE_IMAGE_URL)
+
+    await send_staff_log(
+        interaction.guild,
+        "Loot Crate Opened",
+        f"**User:** {interaction.user.mention}\n**Crate:** {crate_name}\n**Sancs:** {format_coins(sancs_amount)}\n**Card:** {selected_card['name']} (`{selected_card['id']}`)",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="viewcard", description="View a specific card.")
 @app_commands.describe(card="Choose a card by ID or name")
@@ -5175,96 +5302,38 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     emoji_text = f" {custom_emoji}" if custom_emoji else ""
     title_text = f" {title}" if title else ""
 
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active, COUNT(*) as amount
-            FROM inventory
-            JOIN cards ON cards.id = inventory.card_id
-            WHERE user_id=$1
-            GROUP BY cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active
-            ORDER BY cards.rarity, cards.id
-        """, user.id)
-
-    summary = f"**Balance:** {format_coins(bal)}\n"
-    summary += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
-    summary += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n"
+    description = f"**Balance:** {format_coins(bal)}\n"
+    description += f"{BULLET_EMOJI} {LOOT_CRATE_EMOJI} **Loot Crates:** {regular_crates}\n"
+    description += f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} **Legendary Loot Crates:** {legendary_crates}\n"
 
     if regular_snipers > 0:
-        summary += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
+        description += f"{BULLET_EMOJI} {SNIPE_EMOJI} **Snipers:** {regular_snipers}\n"
 
     if legendary_snipers > 0:
-        summary += f"{BULLET_EMOJI} {LEGENDARY_SNIPER_EMOJI} **Legendary Snipers:** {legendary_snipers}\n"
+        description += f"{BULLET_EMOJI} {LEGENDARY_SNIPER_EMOJI} **Legendary Snipers:** {legendary_snipers}\n"
 
-    summary += f"\n**Active Perks**\n{format_active_boosts(active_boosts)}\n"
+    description += f"\n**Active Perks**\n{format_active_boosts(active_boosts)}\n"
 
     if owned_profile_emojis:
-        summary += "\n**Owned Profile Emojis**\n"
+        description += "\n**Owned Profile Emojis**\n"
         for owned_emoji in owned_profile_emojis:
-            summary += f"{BULLET_EMOJI} {owned_emoji['emoji']} `{owned_emoji['name']}`\n"
+            description += f"{BULLET_EMOJI} {owned_emoji['emoji']} `{owned_emoji['name']}`\n"
 
     if owned_titles:
-        summary += "\n**Owned Titles**\n"
+        description += "\n**Owned Titles**\n"
         for owned_title in owned_titles:
-            summary += f"{BULLET_EMOJI} **{owned_title}**\n"
+            description += f"{BULLET_EMOJI} **{owned_title}**\n"
 
-    summary += "\n"
+    description += "\nUse `/cardinventory` to view cards."
 
-    inventory_title = f"{user.display_name}{emoji_text}{title_text}'s Inventory"
-    view = InventoryPaginationView(inventory_title, summary, rows)
+    embed = discord.Embed(
+        title=f"{user.display_name}{emoji_text}{title_text}'s Inventory",
+        description=description.strip(),
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=INVENTORY_ICON_URL)
 
-    await interaction.response.send_message(embed=view.current_embed(), view=view)
-
-async def user_cards_autocomplete(interaction: discord.Interaction, current: str):
-    current = current.lower()
-
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
-            FROM inventory
-            JOIN cards ON cards.id = inventory.card_id
-            WHERE inventory.user_id=$1
-            ORDER BY cards.id
-        """, interaction.user.id)
-
-    choices = []
-
-    for card in rows:
-        label = plain_card_label(card)
-
-        if current and current not in label.lower() and current not in str(card["id"]):
-            continue
-
-        choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
-
-        if len(choices) >= 25:
-            break
-
-    return choices
-
-async def all_cards_autocomplete(interaction: discord.Interaction, current: str):
-    current = current.lower()
-
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT id, name, rarity, custom_type
-            FROM cards
-            ORDER BY id
-        """)
-
-    choices = []
-
-    for card in rows:
-        label = plain_card_label(card)
-
-        if current and current not in label.lower() and current not in str(card["id"]):
-            continue
-
-        choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
-
-        if len(choices) >= 25:
-            break
-
-    return choices
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="cardinventory", description="View only your cards or another user's cards.")
 async def cardinventory(interaction: discord.Interaction, user: discord.Member = None):
@@ -5585,18 +5654,33 @@ async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: st
 
 @bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
 @app_commands.default_permissions(manage_messages=True)
-@app_commands.describe(name="Profile emoji name to remove")
+@app_commands.describe(name="Profile emoji to remove")
 @app_commands.autocomplete(name=profile_emoji_shop_autocomplete)
 async def removeprofileemoji(interaction: discord.Interaction, name: str):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    removed = await remove_profile_emoji_from_shop(name)
+    row = await get_profile_emoji_by_ref(name)
 
-    if not removed:
-        return await interaction.response.send_message("That profile emoji was not found.", ephemeral=True)
+    if not row:
+        return await interaction.response.send_message("Profile emoji not found.", ephemeral=True)
 
-    await interaction.response.send_message(f"Removed **{name}** from the profile emoji shop.")
+    success = await remove_profile_emoji_from_shop(row["name"])
+
+    if not success:
+        return await interaction.response.send_message("Profile emoji not found.", ephemeral=True)
+
+    await send_staff_log(
+        interaction.guild,
+        "Profile Emoji Removed",
+        f"**Emoji:** {row['emoji']} `{row['name']}`\n**Removed by:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+    await interaction.response.send_message(
+        f"Removed {row['emoji']} `{row['name']}` from the profile emoji shop.",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="listprofileemojis", description="View all preset profile emojis in the shop.")
 async def listprofileemojis(interaction: discord.Interaction):
