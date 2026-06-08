@@ -1426,9 +1426,13 @@ async def create_profile_emoji_shop_embed():
 
         for price in sorted(grouped.keys()):
             lines.append(f"**{format_coins(price)}**")
+            lines.append("")
 
-            for row in grouped[price]:
-                lines.append(f"{row['emoji']} `{row['name']}`")
+            items = [f"{row['emoji']} `{row['name']}`" for row in grouped[price]]
+
+            for index in range(0, len(items), 2):
+                pair = "      ".join(items[index:index + 2])
+                lines.append(pair)
 
             lines.append("")
 
@@ -2408,24 +2412,6 @@ async def shop_autocomplete(interaction: discord.Interaction, current: str):
         for key, item in SHOP_ITEMS.items()
         if key != "goosexchange"
         and (current.lower() in item["name"].lower() or current.lower() in key.lower())
-    ][:25]
-
-async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, current: str):
-    rows = await get_user_owned_profile_emojis(interaction.user.id)
-
-    return [
-        app_commands.Choice(name=f"{row['emoji']} {row['name']}", value=str(row["id"]))
-        for row in rows
-        if current.lower() in row["name"].lower() or current.lower() in row["emoji"].lower()
-    ][:25]
-
-async def owned_title_autocomplete(interaction: discord.Interaction, current: str):
-    titles = await get_user_owned_titles(interaction.user.id)
-
-    return [
-        app_commands.Choice(name=title, value=title)
-        for title in titles
-        if current.lower() in title.lower()
     ][:25]
 
 # ---------------- AUTO DROP ----------------
@@ -4498,42 +4484,6 @@ class InventoryPaginationView(discord.ui.View):
         self.page = (self.page + 1) % self.total_pages()
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
-async def profile_emoji_shop_autocomplete(interaction: discord.Interaction, current: str):
-    current = current.lower()
-
-    rows = await get_active_profile_emojis()
-    choices = []
-
-    for row in rows:
-        label = f"{row['name']} {row['emoji']}"
-
-        if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
-            continue
-
-        choices.append(app_commands.Choice(name=label[:100], value=str(row["id"])))
-
-        if len(choices) >= 25:
-            break
-
-    return choices
-
-async def get_profile_emoji_by_ref(ref):
-    ref = str(ref).strip()
-
-    async with db_pool.acquire() as conn:
-        if ref.isdigit():
-            row = await conn.fetchrow(
-                "SELECT * FROM profile_emojis WHERE id=$1",
-                int(ref)
-            )
-            if row:
-                return row
-
-        return await conn.fetchrow(
-            "SELECT * FROM profile_emojis WHERE LOWER(name)=LOWER($1) OR emoji=$1",
-            ref
-        )
-
 async def active_card_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
     rows = await get_active_cards()
@@ -4558,7 +4508,7 @@ async def profile_emoji_shop_autocomplete(interaction: discord.Interaction, curr
     choices = []
 
     for row in rows:
-        label = f"{row['emoji']} {row['name']} • {row['price']:,} Sancs"
+        label = f"{row['emoji']} {row['name']}"
 
         if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
             continue
@@ -4594,7 +4544,7 @@ async def shop_title_autocomplete(interaction: discord.Interaction, current: str
     choices = []
 
     for row in rows:
-        label = f"{row['title']} • {row['price']:,} Sancs"
+        label = row["title"]
 
         if current and current not in row["title"].lower():
             continue
