@@ -4626,83 +4626,17 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message(message, ephemeral=True)
 
 # ---------------- COMMANDS ----------------
-@bot.tree.command(name="settings", description="Staff only: view bot settings and edit instructions.")
-@app_commands.default_permissions(manage_messages=True)
+@bot.tree.command(name="settings", description="Admin only: view and edit bot game settings.")
+@app_commands.default_permissions(administrator=True)
 async def settings(interaction: discord.Interaction):
-    if not await is_staff_member(interaction):
-        return await interaction.response.send_message("No permission.", ephemeral=True)
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
 
-    drop = await get_drop_settings(interaction.guild.id)
-    economy = await get_economy_settings(interaction.guild.id)
-    crates = await get_crate_settings(interaction.guild.id)
-    rarity = await get_rarity_settings(interaction.guild.id)
-    event = await get_event_settings(interaction.guild.id)
-
-    embed = discord.Embed(
-        title="Bot Settings",
-        description=(
-            "Use `/settingsedit setting:value` to change settings directly.\n"
-            "No pop-up panels needed."
-        ),
-        color=discord.Color.from_str("#9e659d")
+    await interaction.response.send_message(
+        embed=await create_settings_home_embed(interaction.guild.id),
+        view=SanctionSettingsView(),
+        ephemeral=True
     )
-
-    embed.add_field(
-        name="Drops",
-        value=(
-            f"**Enabled:** {format_on_off(drop['auto_drop_enabled'])}\n"
-            f"**Minutes:** {drop['auto_drop_minutes']}\n"
-            f"**Chance:** {drop['auto_drop_chance']}%\n"
-            f"**Claim Cooldown:** {drop['claim_cooldown_seconds']} seconds"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Rarity Chances",
-        value=(
-            f"**Common:** {rarity['common_chance']}\n"
-            f"**Rare:** {rarity['rare_chance']}\n"
-            f"**Epic:** {rarity['epic_chance']}\n"
-            f"**Legendary:** {rarity['legendary_chance']}\n"
-            f"**Limited:** {rarity['custom_chance']}"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Economy",
-        value=(
-            f"**Daily:** {economy['daily_min']} - {economy['daily_max']}\n"
-            f"**Weekly:** {economy['weekly_min']} - {economy['weekly_max']}"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Crates",
-        value=(
-            f"**Regular:** {crates['regular_crate_min']} - {crates['regular_crate_max']}\n"
-            f"**Legendary:** {crates['legendary_crate_min']} - {crates['legendary_crate_max']}\n"
-            f"**Legendary Bonus Card Chance:** {crates['legendary_second_card_chance']}%"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Event",
-        value=(
-            f"**Name:** {event['event_name']}\n"
-            f"**Theme:** {event['event_theme']}\n"
-            f"**Type:** {event['event_type']}\n"
-            f"**Launched:** {format_on_off(event['event_launched'])}\n"
-            f"**Event Drops:** {format_on_off(event['event_only_drops'])}\n"
-            f"**Event Boosts:** {format_on_off(event['event_boosts_enabled'])}"
-        ),
-        inline=False
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="ping", description="Staff only: check if the bot is online.")
 @app_commands.default_permissions(manage_messages=True)
@@ -5192,12 +5126,12 @@ async def opencrate(interaction: discord.Interaction, crate_type: app_commands.C
         sancs_amount = random.randint(int(crate_settings["legendary_crate_min"]), int(crate_settings["legendary_crate_max"]))
         crate_name = "Legendary Loot Crate"
         crate_emoji = LEGENDARY_CRATE_EMOJI
-        await remove_loot_crate(interaction.user.id, "legendary", 1)
+        await remove_loot_crate(interaction.user.id, "legendary")
     else:
         sancs_amount = random.randint(int(crate_settings["regular_crate_min"]), int(crate_settings["regular_crate_max"]))
         crate_name = "Loot Crate"
         crate_emoji = LOOT_CRATE_EMOJI
-        await remove_loot_crate(interaction.user.id, "regular", 1)
+        await remove_loot_crate(interaction.user.id, "regular")
 
     selected_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
     await add_card_to_inventory(interaction.user.id, selected_card["id"])
@@ -5355,12 +5289,54 @@ async def cardinventory(interaction: discord.Interaction, user: discord.Member =
             ORDER BY cards.rarity, cards.id
         """, user.id)
 
-    inventory_title = f"{user.display_name}{emoji_text}{title_text}'s Card Inventory"
-    summary = "**Card Collection**"
+    grouped = {
+        "Common": [],
+        "Rare": [],
+        "Epic": [],
+        "Legendary": [],
+        "Custom": [],
+    }
 
-    view = InventoryPaginationView(inventory_title, summary, rows)
+    for row in rows:
+        grouped.setdefault(row["rarity"], []).append(row)
 
-    await interaction.response.send_message(embed=view.current_embed(), view=view)
+    embed = discord.Embed(
+        title=f"{user.display_name}{emoji_text}{title_text}'s Card Inventory",
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=INVENTORY_ICON_URL)
+
+    has_cards = False
+
+    for rarity in ["Common", "Rare", "Epic", "Legendary", "Custom"]:
+        cards_for_rarity = grouped.get(rarity, [])
+
+        if not cards_for_rarity:
+            continue
+
+        has_cards = True
+        lines = []
+
+        for row in cards_for_rarity[:10]:
+            limited_note = "" if row["is_active"] else " *(unobtainable)*"
+            lines.append(
+                f"{BULLET_EMOJI} **ID:** `{row['id']}` {row['name']} ({format_card_type_public(row)}) x{row['amount']}{limited_note}"
+            )
+
+        extra_count = len(cards_for_rarity) - 10
+        if extra_count > 0:
+            lines.append(f"...and {extra_count} more. Use `/cards` for full card browsing.")
+
+        embed.add_field(
+            name=display_rarity_name(rarity),
+            value="\n".join(lines),
+            inline=False
+        )
+
+    if not has_cards:
+        embed.description = "No cards yet."
+
+    await interaction.response.send_message(embed=embed)
 
 async def user_cards_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
