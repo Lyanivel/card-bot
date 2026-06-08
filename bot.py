@@ -3931,7 +3931,6 @@ class SettingsCategorySelect(discord.ui.Select):
             discord.SelectOption(label="Economy Settings", value="economy", description="Daily, weekly, and currency settings"),
             discord.SelectOption(label="Crate Settings", value="crates", description="Loot crate rewards and odds"),
             discord.SelectOption(label="Cosmetic Settings", value="cosmetics", description="Profile emojis and titles"),
-            discord.SelectOption(label="Staff Settings", value="staff", description="Staff role and log channels"),
         ]
 
         super().__init__(
@@ -4721,75 +4720,67 @@ async def daily(interaction: discord.Interaction):
 
     await interaction.response.send_message(message)
 
-@bot.tree.command(name="weekly", description="Claim your weekly reward and Loot Crate.")
+@bot.tree.command(name="weekly", description="Claim your weekly reward.")
 async def weekly(interaction: discord.Interaction):
     user_id = interaction.user.id
-    economy_settings = await get_economy_settings(interaction.guild.id)
+    last = await get_cooldown(user_id, "weekly")
     now = int(time.time())
-    last_used = await get_cooldown(user_id, "weekly")
 
-    if last_used and now - last_used < WEEKLY_COOLDOWN:
-        remaining = WEEKLY_COOLDOWN - (now - last_used)
-        days = remaining // 86400
-        hours = (remaining % 86400) // 3600
-
+    if last and now - int(last) < WEEKLY_COOLDOWN:
+        ready_at = int(last) + WEEKLY_COOLDOWN
         return await interaction.response.send_message(
-            f"You already claimed your weekly. Try again in {days}d {hours}h.",
+            f"You already claimed your weekly reward. Try again <t:{ready_at}:R>.",
             ephemeral=True
         )
 
-    weekly_message = f"{weekly_message}\n" +  random.choice(WEEKLY_CLAIM_MESSAGES)
+    weekly_message = random.choice(WEEKLY_CLAIM_MESSAGES) if "WEEKLY_CLAIM_MESSAGES" in globals() else "Another week, another reward."
 
-    await interaction.response.send_message(
-        f"{WEEKLY_BOX_EMOJI} | Your Weekly Box is unsealing!"
-    )
-
-    await asyncio.sleep(2)
-
+    economy_settings = await get_economy_settings(interaction.guild.id)
     amount = random.randint(int(economy_settings["weekly_min"]), int(economy_settings["weekly_max"]))
-    boost_bonus = 0
 
-    if await get_active_boost(user_id, "weekly"):
-        boost_bonus = int(amount * WEEKLY_BOOST_PERCENT / 100)
-        await clear_boost(user_id, "weekly")
+    event_multiplier = await get_event_reward_multiplier(interaction.guild.id if interaction.guild else None)
+    if event_multiplier > 1:
+        amount = int(amount * event_multiplier)
 
-    total = amount + boost_bonus
-
-    await add_balance(user_id, total)
-    await add_loot_crate(user_id, "regular", 1)
+    await add_balance(user_id, amount)
     await set_cooldown(user_id, "weekly")
 
-    reward_lines = [
-        f"{BULLET_EMOJI} **Sancs:** {format_coins(total)}",
-        f"{BULLET_EMOJI} **Loot Crate:** 1 {LOOT_CRATE_EMOJI}",
-    ]
+    bonus_lines = []
 
-    if boost_bonus > 0:
-        reward_lines.append(
-            f"{BULLET_EMOJI} {WEEKLY_BOOST_EMOJI} **Weekly Boost bonus:** {format_coins(boost_bonus)}"
-        )
-
-    found_daily_boost = random.randint(1, 100) <= int(economy_settings["weekly_daily_boost_chance"])
-    found_luck_boost = random.randint(1, 100) <= int(economy_settings["weekly_luck_boost_chance"])
-    found_weekly_boost = random.randint(1, 100) <= int(economy_settings["weekly_weekly_boost_chance"])
-
-    if found_daily_boost:
+    if random.randint(1, 100) <= int(economy_settings["weekly_daily_boost_chance"]):
         await set_boost(user_id, "daily", 24 * 60 * 60)
-        reward_lines.append(f"{BULLET_EMOJI} {DAILY_BOOST_EMOJI} **Daily Boost:** applies to your next /daily")
+        bonus_lines.append(f"{DAILY_BOOST_EMOJI} Daily Boost")
 
-    if found_luck_boost:
+    if random.randint(1, 100) <= int(economy_settings["weekly_luck_boost_chance"]):
         await set_boost(user_id, "luck", 60 * 60)
-        reward_lines.append(f"{BULLET_EMOJI} {LUCK_BOOST_EMOJI} **Luck Boost:** active for 1 hour")
+        bonus_lines.append(f"{LUCK_BOOST_EMOJI} Luck Boost")
 
-    if found_weekly_boost:
+    if random.randint(1, 100) <= int(economy_settings["weekly_weekly_boost_chance"]):
         await set_boost(user_id, "weekly", 7 * 24 * 60 * 60)
-        reward_lines.append(f"{BULLET_EMOJI} {WEEKLY_BOOST_EMOJI} **Weekly Boost:** applies to your next /weekly")
+        bonus_lines.append(f"{WEEKLY_BOOST_EMOJI} Weekly Boost")
 
-    rewards_text = "\n".join(reward_lines)
+    await add_loot_crate(user_id, "legendary", 1)
 
-    await interaction.edit_original_response(
-        content=rewards_text
+    description = (
+        f"{weekly_message}\n\n"
+        f"{BULLET_EMOJI} Sancs: **{format_coins(amount)}**\n"
+        f"{BULLET_EMOJI} {LEGENDARY_CRATE_EMOJI} Legendary Loot Crate: **1**"
     )
+
+    if event_multiplier > 1:
+        description += "\nActive event bonus applied."
+
+    if bonus_lines:
+        description += "\n\n**Bonus Perks**\n" + "\n".join(f"{BULLET_EMOJI} {line}" for line in bonus_lines)
+
+    embed = discord.Embed(
+        title=f"{WEEKLY_BOX_EMOJI} Weekly Reward",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+    embed.set_thumbnail(url=LEGENDARY_CRATE_IMAGE_URL)
+
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="givecurrency", description="Give some of your currency to another user.")
 @app_commands.describe(
@@ -5160,13 +5151,6 @@ async def opencrate(interaction: discord.Interaction, crate_type: app_commands.C
         color=discord.Color.from_str("#9e659d")
     )
     embed.set_thumbnail(url=LEGENDARY_CRATE_IMAGE_URL if crate_type.value == "legendary" else LOOT_CRATE_IMAGE_URL)
-
-    await send_staff_log(
-        interaction.guild,
-        "Loot Crate Opened",
-        f"**User:** {interaction.user.mention}\n**Crate:** {crate_name}\n**Sancs:** {format_coins(sancs_amount)}\n**Card:** {selected_card['name']} (`{selected_card['id']}`)",
-        discord.Color.from_str("#9e659d")
-    )
 
     await interaction.followup.send(embed=embed)
 
