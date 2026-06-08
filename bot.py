@@ -1160,6 +1160,10 @@ def get_color(rarity):
 def format_coins(amount: int):
     return f"{CURRENCY_EMOJI} {amount:,}"
 
+def format_cooldown_timestamp(last_used, cooldown_seconds):
+    ready_at = int(last_used) + int(cooldown_seconds)
+    return f"<t:{ready_at}:R>"
+
 def eastern_day_number():
     now = datetime.now(ZoneInfo("America/New_York"))
     return int(now.strftime("%Y%m%d"))
@@ -3885,7 +3889,7 @@ class DropSettingsView(discord.ui.View):
 
 class StaffSettingsView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=180)
+        super().__init__(timeout=300)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -4387,7 +4391,7 @@ def build_cards_page_embed(grouped_cards, rarity, page, per_page=10):
     page_cards = cards_for_rarity[start_index:start_index + per_page]
 
     if not page_cards:
-        description = f"No {rarity} cards are currently obtainable."
+        description = f"No {display_rarity_name(rarity)} cards are currently obtainable."
     else:
         lines = []
         for card in page_cards:
@@ -4395,11 +4399,11 @@ def build_cards_page_embed(grouped_cards, rarity, page, per_page=10):
         description = "\n".join(lines)
 
     embed = discord.Embed(
-        title=f"Currently Obtainable Cards — {rarity}",
+        title=f"Currently Obtainable Cards — {display_rarity_name(rarity)}",
         description=description,
         color=get_color(rarity)
     )
-    embed.set_footer(text=f"Page {page + 1}/{total_pages}")
+    embed.set_footer(text=f"{display_rarity_name(rarity)} page {page + 1}/{total_pages}")
     return embed
 
 class CardRaritySelect(discord.ui.Select):
@@ -4410,7 +4414,7 @@ class CardRaritySelect(discord.ui.Select):
             discord.SelectOption(label="Rare", value="Rare"),
             discord.SelectOption(label="Epic", value="Epic"),
             discord.SelectOption(label="Legendary", value="Legendary"),
-            discord.SelectOption(label="Custom", value="Custom"),
+            discord.SelectOption(label="Limited", value="Custom"),
         ]
         super().__init__(placeholder="Jump to a rarity...", min_values=1, max_values=1, options=options)
 
@@ -5262,6 +5266,33 @@ async def all_cards_autocomplete(interaction: discord.Interaction, current: str)
 
     return choices
 
+@bot.tree.command(name="cardinventory", description="View only your cards or another user's cards.")
+async def cardinventory(interaction: discord.Interaction, user: discord.Member = None):
+    user = user or interaction.user
+
+    title = await get_title(user.id)
+    custom_emoji = await get_user_custom_emoji(user.id)
+
+    emoji_text = f" {custom_emoji}" if custom_emoji else ""
+    title_text = f" {title}" if title else ""
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active, COUNT(*) as amount
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE user_id=$1
+            GROUP BY cards.id, cards.name, cards.rarity, cards.custom_type, cards.is_active
+            ORDER BY cards.rarity, cards.id
+        """, user.id)
+
+    inventory_title = f"{user.display_name}{emoji_text}{title_text}'s Card Inventory"
+    summary = "**Card Collection**"
+
+    view = InventoryPaginationView(inventory_title, summary, rows)
+
+    await interaction.response.send_message(embed=view.current_embed(), view=view)
+
 @bot.tree.command(name="trade", description="Trade one card with another user.")
 @app_commands.describe(
     user="User you want to trade with",
@@ -5819,7 +5850,7 @@ async def help_command(interaction: discord.Interaction):
         value=(
             "`/cards` — View obtainable cards\n"
             "`/viewcard` — View a specific card\n"
-            "`/inventory` — View your inventory\n"
+            "`/inventory`, `/cardinventory` — View your inventory\n"
             "`/trade` — Trade cards with another member\n"
             "`/opencrate` — Open a loot crate"
         ),
@@ -5866,6 +5897,8 @@ async def staffhelp(interaction: discord.Interaction):
         ),
         inline=False
     )
+
+    embed.add_field(name="Settings", value="\n`/settingsedit` - quickly edit bot settings.\n`/setraritychance` - edit rarity drop weights.\n`/raritychances` - view rarity drop weights.", inline=False)
 
     embed.add_field(
         name="Staff Cards",
