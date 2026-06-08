@@ -1425,14 +1425,10 @@ async def create_profile_emoji_shop_embed():
         lines = []
 
         for price in sorted(grouped.keys()):
-            lines.append(f"{CURRENCY_EMOJI} **{price:,}**")
-            lines.append("")
+            lines.append(f"**{format_coins(price)}**")
 
-            emojis = [row["emoji"] for row in grouped[price]]
-
-            for index in range(0, len(emojis), 2):
-                pair = "      ".join(emojis[index:index + 2])
-                lines.append(pair)
+            for row in grouped[price]:
+                lines.append(f"{row['emoji']} `{row['name']}`")
 
             lines.append("")
 
@@ -4556,6 +4552,104 @@ async def active_card_autocomplete(interaction: discord.Interaction, current: st
 
     return choices
 
+async def profile_emoji_shop_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    rows = await get_active_profile_emojis()
+    choices = []
+
+    for row in rows:
+        label = f"{row['emoji']} {row['name']} • {row['price']:,} Sancs"
+
+        if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(row["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
+async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    rows = await get_user_owned_profile_emojis(interaction.user.id)
+    choices = []
+
+    for row in rows:
+        label = f"{row['emoji']} {row['name']}"
+
+        if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(row["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
+async def shop_title_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    rows = await get_active_shop_titles()
+    choices = []
+
+    for row in rows:
+        label = f"{row['title']} • {row['price']:,} Sancs"
+
+        if current and current not in row["title"].lower():
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(row["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
+async def owned_title_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    titles = await get_user_owned_titles(interaction.user.id)
+    choices = []
+
+    for title in titles:
+        if current and current not in title.lower():
+            continue
+
+        choices.append(app_commands.Choice(name=title[:100], value=title))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
+async def get_profile_emoji_by_ref(ref):
+    ref = str(ref).strip()
+
+    async with db_pool.acquire() as conn:
+        if ref.isdigit():
+            row = await conn.fetchrow("SELECT * FROM profile_emojis WHERE id=$1", int(ref))
+            if row:
+                return row
+
+        return await conn.fetchrow(
+            "SELECT * FROM profile_emojis WHERE LOWER(name)=LOWER($1) OR emoji=$1",
+            ref
+        )
+
+async def get_shop_title_by_ref(ref):
+    ref = str(ref).strip()
+
+    async with db_pool.acquire() as conn:
+        if ref.isdigit():
+            row = await conn.fetchrow("SELECT * FROM shop_titles WHERE id=$1", int(ref))
+            if row:
+                return row
+
+        return await conn.fetchrow(
+            "SELECT * FROM shop_titles WHERE LOWER(title)=LOWER($1)",
+            ref
+        )
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -5603,16 +5697,32 @@ async def addtitle(interaction: discord.Interaction, title: str, price: int):
 @bot.tree.command(name="removetitle", description="Staff only: remove a preset title from the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(title="Title to remove")
+@app_commands.autocomplete(title=shop_title_autocomplete)
 async def removetitle(interaction: discord.Interaction, title: str):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    removed = await remove_title_from_shop(title)
+    row = await get_shop_title_by_ref(title)
 
-    if not removed:
-        return await interaction.response.send_message("That title was not found.", ephemeral=True)
+    if not row:
+        return await interaction.response.send_message("Title not found.", ephemeral=True)
 
-    await interaction.response.send_message(f"Removed **{title}** from the title shop.")
+    success = await remove_title_from_shop(row["title"])
+
+    if not success:
+        return await interaction.response.send_message("Title not found.", ephemeral=True)
+
+    await send_staff_log(
+        interaction.guild,
+        "Title Removed",
+        f"**Title:** {row['title']}\n**Removed by:** {interaction.user.mention}",
+        discord.Color.red()
+    )
+
+    await interaction.response.send_message(
+        f"Removed `{row['title']}` from the title shop.",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="listtitles", description="View all preset titles in the shop.")
 async def listtitles(interaction: discord.Interaction):
