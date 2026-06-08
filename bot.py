@@ -5362,6 +5362,58 @@ async def cardinventory(interaction: discord.Interaction, user: discord.Member =
 
     await interaction.response.send_message(embed=view.current_embed(), view=view)
 
+async def user_cards_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE inventory.user_id=$1
+            ORDER BY cards.id
+        """, interaction.user.id)
+
+    choices = []
+
+    for card in rows:
+        label = plain_card_label(card)
+
+        if current and current not in label.lower() and current not in str(card["id"]):
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
+async def all_cards_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, name, rarity, custom_type
+            FROM cards
+            ORDER BY id
+        """)
+
+    choices = []
+
+    for card in rows:
+        label = plain_card_label(card)
+
+        if current and current not in label.lower() and current not in str(card["id"]):
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
 @bot.tree.command(name="trade", description="Trade one card with another user.")
 @app_commands.describe(
     user="User you want to trade with",
