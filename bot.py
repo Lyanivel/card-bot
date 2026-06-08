@@ -5555,7 +5555,7 @@ async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: st
 @bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(name="Profile emoji name to remove")
-@app_commands.autocomplete(emoji=profile_emoji_shop_autocomplete)
+@app_commands.autocomplete(name=profile_emoji_shop_autocomplete)
 async def removeprofileemoji(interaction: discord.Interaction, name: str):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
