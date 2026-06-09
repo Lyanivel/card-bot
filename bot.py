@@ -6268,8 +6268,15 @@ class MemberHelpView(discord.ui.View):
         self.add_item(MemberHelpSelect())
 
 def create_member_help_embed(section="main"):
+    titles = {
+        "main": "Main Help",
+        "cards": "Cards & Collections Help",
+        "trade": "Trading Help",
+        "snipe": "Sniper Game Help",
+    }
+
     embed = discord.Embed(
-        title="Help Menu",
+        title=titles.get(section, "Help Menu"),
         color=discord.Color.from_str("#9e659d")
     )
 
@@ -6369,8 +6376,16 @@ class StaffHelpView(discord.ui.View):
         self.add_item(StaffHelpSelect())
 
 def create_staff_help_embed(section="staff"):
+    titles = {
+        "staff": "Staff Help",
+        "admin": "Admin Help",
+        "events": "Events & Collections Help",
+        "shop": "Shop Management Help",
+        "settings": "Settings Help",
+    }
+
     embed = discord.Embed(
-        title="Staff Help",
+        title=titles.get(section, "Staff Help"),
         color=discord.Color.from_str("#9e659d")
     )
 
