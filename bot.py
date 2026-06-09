@@ -3312,7 +3312,6 @@ async def create_settings_home_embed(guild_id):
         f"{TOGGLE_ON_EMOJI} **Economy Settings**\n"
         f"{TOGGLE_ON_EMOJI} **Crate Settings**\n"
         f"{TOGGLE_ON_EMOJI} **Cosmetic Settings**\n"
-        f"{TOGGLE_ON_EMOJI} **Staff Settings**"
     )
 
     embed = discord.Embed(
@@ -4803,6 +4802,69 @@ async def notify_completed_sets(interaction, user_id):
             except Exception:
                 pass
 
+async def event_card_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT id, name, rarity, custom_type
+            FROM cards
+            WHERE is_event_card=TRUE
+            ORDER BY id
+        """)
+
+    choices = []
+
+    for card in rows:
+        label = plain_card_label(card)
+
+        if current and current not in label.lower() and current not in str(card["id"]):
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
+async def settings_choice_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    options = [
+        "drop_chance",
+        "drop_minutes",
+        "claim_cooldown",
+        "common_chance",
+        "rare_chance",
+        "epic_chance",
+        "legendary_chance",
+        "custom_chance",
+        "daily_min",
+        "daily_max",
+        "weekly_min",
+        "weekly_max",
+        "regular_crate_min",
+        "regular_crate_max",
+        "legendary_crate_min",
+        "legendary_crate_max",
+        "legendary_second_card_chance",
+    ]
+
+    choices = []
+
+    for option in options:
+        label = option.replace("_", " ").title()
+
+        if current and current not in option.lower() and current not in label.lower():
+            continue
+
+        choices.append(app_commands.Choice(name=label[:100], value=option))
+
+        if len(choices) >= 25:
+            break
+
+    return choices
+
 # ---------------- BOT ----------------
 class Bot(discord.Client):
     def __init__(self):
@@ -6181,127 +6243,237 @@ async def givecrate(
         f"Gave {user.mention} **{amount}x {crate_name}**."
     )
 
-@bot.tree.command(name="help", description="View member commands and bot help.")
-async def help_command(interaction: discord.Interaction):
+class MemberHelpSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Main Commands", value="main", description="Daily, weekly, inventory, shop"),
+            discord.SelectOption(label="Cards & Collections", value="cards", description="Cards, sets, collections"),
+            discord.SelectOption(label="Trading", value="trade", description="Trading cards with other users"),
+            discord.SelectOption(label="Sniper Game", value="snipe", description="How snipes work"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a help section...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(embed=create_member_help_embed(self.values[0]), view=self.view)
+
+class MemberHelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(MemberHelpSelect())
+
+def create_member_help_embed(section="main"):
     embed = discord.Embed(
-        title="Sanction Bot Help",
-        description="Here’s everything you need to survive.",
+        title="Help Menu",
         color=discord.Color.from_str("#9e659d")
     )
 
-    embed.add_field(
-        name="Currency",
-        value=(
-            "`/balance` — View your Sancs balance\n"
-            "`/daily` — Claim your daily Sancs\n"
-            "`/weekly` — Claim your weekly reward\n"
-            "`/givecurrency` — Give Sancs to another member\n"
-            "`/leaderboard` — View the richest members\n"
-            "`/shop` — Open the shop\n"
-            "`/buy` — Buy an item\n"
-            "`/sell` — Sell one of your cards"
-        ),
-        inline=False
+    if section == "main":
+        embed.description = "Here’s everything you need to survive."
+        embed.add_field(
+            name="Main Commands",
+            value=(
+                "`/daily` - claim daily Sancs.\n"
+                "`/weekly` - claim your weekly reward.\n"
+                "`/inventory` - view Sancs, perks, crates, titles, and emojis.\n"
+                "`/cardinventory` - view your cards by rarity.\n"
+                "`/shop` - view the shop.\n"
+                "`/buy` - buy shop items.\n"
+                "`/leaderboard` - view the leaderboard."
+            ),
+            inline=False
+        )
+
+    elif section == "cards":
+        embed.description = "Cards, collections, and completion rewards."
+        embed.add_field(
+            name="Cards",
+            value=(
+                "`/cards` - view obtainable cards.\n"
+                "`/viewcard` - view a card.\n"
+                "`/cardinventory` - view owned cards.\n"
+                "`/sellcard` - sell a card."
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Collections",
+            value=(
+                "`/cardsets` - view available collections.\n"
+                "`/viewset` - view a collection and your progress.\n"
+                "`/checksets` - check completed collection rewards."
+            ),
+            inline=False
+        )
+
+    elif section == "trade":
+        embed.description = "Trade cards safely with other users."
+        embed.add_field(
+            name="Trading",
+            value=(
+                "`/trade` - request a card trade.\n"
+                "Both users must own the cards being traded.\n"
+                "Trades use Accept/Decline buttons."
+            ),
+            inline=False
+        )
+
+    elif section == "snipe":
+        embed.description = "The sniper game is a hide-and-seek mute game."
+        embed.add_field(
+            name="How Snipes Work",
+            value=(
+                "Buy a sniper from the shop, then use `/snipe` on another user.\n"
+                "The target hides in a bush.\n"
+                "The sniper chooses a bush.\n"
+                "If the sniper finds them, the target is muted for the set time.\n"
+                "If the sniper misses, the target escapes."
+            ),
+            inline=False
+        )
+
+    return embed
+
+@bot.tree.command(name="help", description="View bot help.")
+async def help(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=create_member_help_embed("main"), view=MemberHelpView(), ephemeral=True)
+
+class StaffHelpSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Staff Commands", value="staff", description="General staff tools"),
+            discord.SelectOption(label="Admin Setup", value="admin", description="Setup and configuration"),
+            discord.SelectOption(label="Events & Collections", value="events", description="Event cards and card sets"),
+            discord.SelectOption(label="Shop Management", value="shop", description="Titles, emojis, cards, shop"),
+            discord.SelectOption(label="Settings", value="settings", description="Drop, rarity, crate, economy settings"),
+        ]
+
+        super().__init__(
+            placeholder="Choose a staff help section...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(embed=create_staff_help_embed(self.values[0]), view=self.view)
+
+class StaffHelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(StaffHelpSelect())
+
+def create_staff_help_embed(section="staff"):
+    embed = discord.Embed(
+        title="Staff Help",
+        color=discord.Color.from_str("#9e659d")
     )
 
-    embed.add_field(
-        name="Cards",
-        value=(
-            "`/cards` — View obtainable cards\n"
-            "`/viewcard` — View a specific card\n"
-            "`/inventory`, `/cardinventory` — View your inventory\n"
-            "`/trade` — Trade cards with another member\n"
-            "`/opencrate` — Open a loot crate"
-        ),
-        inline=False
-    )
+    if section == "staff":
+        embed.description = "General staff tools."
+        embed.add_field(
+            name="Cards & User Tools",
+            value=(
+                "`/dropcard` - manually drop a card.\n"
+                "`/givecard` - give a card to a user.\n"
+                "`/resetuser` - reset a user with confirmation.\n"
+                "`/addcurrency` - give Sancs to a user.\n"
+                "`/removecurrency` - remove Sancs from a user."
+            ),
+            inline=False
+        )
 
-    embed.add_field(
-        name="Cosmetics",
-        value=(
-            "`/listtitles` — View available titles\n"
-            "`/equiptitle` — Equip a title you own\n"
-            "`/listprofileemojis` — View available profile emojis\n"
-            "`/equipemoji` — Equip a profile emoji you own"
-        ),
-        inline=False
-    )
+    elif section == "admin":
+        embed.description = "Setup and admin configuration."
+        embed.add_field(
+            name="Setup",
+            value=(
+                "`/setstaffrole` - set the staff role.\n"
+                "`/setstafflog` - set the staff log channel.\n"
+                "`/adddropchannel` - add a drop channel.\n"
+                "`/removedropchannel` - remove a drop channel.\n"
+                "`/botstatus` - view bot setup/status."
+            ),
+            inline=False
+        )
 
-    embed.add_field(
-        name="Snipe",
-        value="`/snipe` — Use a sniper against another member",
-        inline=False
-    )
+    elif section == "events":
+        embed.description = "Event cards, collections, and rewards."
+        embed.add_field(
+            name="Event Cards",
+            value=(
+                "`/seteventcard` - mark a card as an event card.\n"
+                "`/removeeventcard` - remove a card from the event-card pool.\n"
+                "`/eventsetup` - manage event settings."
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Collections",
+            value=(
+                "`/setticketchannel` - set the collection reward ticket channel.\n"
+                "`/setcompletionemoji` - set the collection complete emoji.\n"
+                "`/createset` - create a collection set.\n"
+                "`/addcardtoset` - add a card to a set.\n"
+                "`/removecardfromset` - remove a card from a set.\n"
+                "`/viewset` - view a set.\n"
+                "`/cardsets` - view all sets.\n"
+                "`/checksets` - check completed sets."
+            ),
+            inline=False
+        )
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    elif section == "shop":
+        embed.description = "Shop and reward management."
+        embed.add_field(
+            name="Cards",
+            value=(
+                "`/addcard` - add a card.\n"
+                "`/removecard` - remove a card from future drops.\n"
+                "`/cards` - view obtainable cards."
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Titles & Emojis",
+            value=(
+                "`/addtitle` - add a shop title.\n"
+                "`/removetitle` - remove a shop title.\n"
+                "`/addprofileemoji` - add a profile emoji.\n"
+                "`/removeprofileemoji` - remove a profile emoji.\n"
+                "`/unequiptitle` - remove your equipped title.\n"
+                "`/unequipemoji` - remove your equipped emoji."
+            ),
+            inline=False
+        )
 
-@bot.tree.command(name="staffhelp", description="Staff only: view staff and admin commands.")
+    elif section == "settings":
+        embed.description = "Bot settings and tuning."
+        embed.add_field(
+            name="Settings",
+            value=(
+                "`/settings` - open the settings panel.\n"
+                "`/settingsedit` - quickly edit common settings.\n"
+                "`/raritychances` - view rarity weights.\n"
+                "`/setraritychance` - edit rarity weights."
+            ),
+            inline=False
+        )
+
+    return embed
+
+@bot.tree.command(name="staffhelp", description="Staff only: view staff help.")
 @app_commands.default_permissions(manage_messages=True)
 async def staffhelp(interaction: discord.Interaction):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
-    embed = discord.Embed(
-        title="Staff Help",
-        description="Staff and admin command reference.",
-        color=discord.Color.from_str("#9e659d")
-    )
-
-    embed.add_field(
-        name="Staff Currency / Rewards",
-        value=(
-            "`/addbal` — Add Sancs to a member\n"
-            "`/givesniper` — Give regular or legendary snipers\n"
-            "`/givecrate` — Give regular or legendary crates"
-        ),
-        inline=False
-    )
-
-    embed.add_field(name="Settings", value="\n`/settingsedit` - quickly edit bot settings.\n`/setraritychance` - edit rarity drop weights.\n`/raritychances` - view rarity drop weights.", inline=False)
-
-    embed.add_field(
-        name="Staff Cards",
-        value=(
-            "`/addcard` — Add or reactivate a card\n"
-            "`/dropcard` — Manually drop a card\n"
-            "`/removecard` — Remove a card from future drops"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Drop Channels",
-        value=(
-            "`/addropchannel` — Add an auto-drop channel\n"
-            "`/removedropchannel` — Remove an auto-drop channel\n"
-            "`/listdropchannels` — View auto-drop channels"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Cosmetics",
-        value=(
-            "`/addtitle` — Add a title to the shop\n"
-            "`/removetitle` — Remove a title from the shop\n"
-            "`/addprofileemoji` — Add a profile emoji to the shop\n"
-            "`/removeprofileemoji` — Remove a profile emoji from the shop"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Admin / Setup",
-        value=(
-            "`/settings` — Open Sanction Settings\n`/eventsetup` — Open event setup tools\n`/botstatus` — View current bot setup\n`/setstafflogchannel` — Set the staff log channel\n`/resetuser` — Reset one user\n"
-            "`/setstaffrole` — Set the staff command role\n"
-            "`/togglestaffsnipe` — Toggle staff sniping\n"
-            "`/ping` — Check if the bot is online"
-        ),
-        inline=False
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.response.send_message(embed=create_staff_help_embed("staff"), view=StaffHelpView(), ephemeral=True)
 
 @bot.tree.command(name="setstafflogchannel", description="Admin only: set the staff log channel.")
 @app_commands.default_permissions(administrator=True)
@@ -6621,7 +6793,7 @@ async def seteventcard(interaction: discord.Interaction, card: str, event_name: 
 @bot.tree.command(name="removeeventcard", description="Staff only: remove event-card lock from a card.")
 @app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(card="Card to unlock")
-@app_commands.autocomplete(card=active_card_autocomplete)
+@app_commands.autocomplete(card=event_card_autocomplete)
 async def removeeventcard(interaction: discord.Interaction, card: str):
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
