@@ -572,6 +572,10 @@ async def setup_database():
                 event_boosts_enabled BOOLEAN NOT NULL DEFAULT FALSE
             );
         """)
+        await conn.execute("""
+            ALTER TABLE event_settings
+            ADD COLUMN IF NOT EXISTS event_card_chance INTEGER NOT NULL DEFAULT 10;
+        """)
 
         await conn.execute("""
             ALTER TABLE event_settings
@@ -980,7 +984,6 @@ async def set_rarity_setting_db(guild_id, column, value: int):
         "rare_chance",
         "epic_chance",
         "legendary_chance",
-        "custom_chance",
     }
 
     if column not in allowed_columns:
@@ -1001,7 +1004,6 @@ def choose_rarity_from_settings(settings, allowed_rarities=None):
         "Rare": int(settings.get("rare_chance", 20)),
         "Epic": int(settings.get("epic_chance", 8)),
         "Legendary": int(settings.get("legendary_chance", 2)),
-        "Custom": int(settings.get("custom_chance", 0)),
     }
 
     if allowed_rarities is not None:
@@ -1015,6 +1017,32 @@ def choose_rarity_from_settings(settings, allowed_rarities=None):
 
     return random.choices(list(weights.keys()), weights=list(weights.values()), k=1)[0]
 
+async def choose_drop_card(cards, guild_id):
+    if not cards:
+        return None
+
+    event_settings = await get_event_settings(guild_id)
+    event_drops_on = bool(event_settings.get("event_only_drops", False) or event_settings.get("event_launched", False))
+    event_chance = int(event_settings.get("event_card_chance", 10))
+
+    event_cards = [
+        card for card in cards
+        if bool(get_record_value(card, "is_event_card", False))
+    ]
+
+    normal_cards = [
+        card for card in cards
+        if not bool(get_record_value(card, "is_event_card", False)) and card["rarity"] != "Custom"
+    ]
+
+    if event_drops_on and event_cards and random.randint(1, 100) <= event_chance:
+        return random.choice(event_cards)
+
+    if normal_cards:
+        return await choose_card_from_pool(normal_cards, guild_id)
+
+    return random.choice(cards)
+
 async def choose_card_from_pool(cards, guild_id=None):
     if not cards:
         return None
@@ -1023,6 +1051,14 @@ async def choose_card_from_pool(cards, guild_id=None):
         return random.choice(cards)
 
     rarity_settings = await get_rarity_settings(guild_id)
+    normal_cards = [
+        card for card in cards
+        if card["rarity"] != "Custom" and not bool(get_record_value(card, "is_event_card", False))
+    ]
+
+    if normal_cards:
+        cards = normal_cards
+
     available_rarities = sorted(set(card["rarity"] for card in cards))
 
     for _ in range(12):
@@ -1061,6 +1097,16 @@ async def get_event_settings(guild_id):
                 "event_boosts_enabled": False
             }
         return dict(row)
+
+async def set_event_card_chance_db(guild_id, chance: int):
+    chance = max(0, min(100, int(chance)))
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO event_settings (guild_id, event_card_chance)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET event_card_chance=$2
+        """, guild_id, chance)
 
 async def set_event_setting_db(guild_id, column, value):
     allowed_columns = {
@@ -4838,7 +4884,6 @@ async def settings_choice_autocomplete(interaction: discord.Interaction, current
         "rare_chance",
         "epic_chance",
         "legendary_chance",
-        "custom_chance",
         "daily_min",
         "daily_max",
         "weekly_min",
@@ -5421,7 +5466,7 @@ async def opencrate(interaction: discord.Interaction, crate_type: app_commands.C
         crate_emoji = LOOT_CRATE_EMOJI
         await remove_loot_crate(interaction.user.id, "regular")
 
-    selected_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
+    selected_card = await choose_drop_card(cards, interaction.guild.id if interaction.guild else None)
     await add_card_to_inventory(interaction.user.id, selected_card["id"])
     await add_balance(interaction.user.id, sancs_amount)
 
@@ -5839,7 +5884,7 @@ async def dropcard(
             cards = await conn.fetch("SELECT * FROM cards WHERE is_active = TRUE")
     if not cards:
         return await interaction.response.send_message("No cards found for that choice.", ephemeral=True)
-    selected_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
+    selected_card = await choose_drop_card(cards, interaction.guild.id if interaction.guild else None)
     await send_staff_log(
         interaction.guild,
         "Manual Card Drop",
@@ -6864,7 +6909,6 @@ SETTING_OPTIONS = {
             "rare_chance": {"label": "Rare", "kind": "rarity", "values": [0, 5, 10, 15, 20, 25, 30, 40, 50], "suffix": ""},
             "epic_chance": {"label": "Epic", "kind": "rarity", "values": [0, 1, 2, 3, 5, 8, 10, 15, 20, 25], "suffix": ""},
             "legendary_chance": {"label": "Legendary", "kind": "rarity", "values": [0, 1, 2, 3, 5, 8, 10, 15], "suffix": ""},
-            "custom_chance": {"label": "Limited", "kind": "rarity", "values": [0, 1, 2, 3, 5, 8, 10, 15, 20, 25], "suffix": ""},
         },
     },
     "economy": {
@@ -6874,6 +6918,12 @@ SETTING_OPTIONS = {
             "daily_max": {"label": "Daily Maximum", "kind": "economy", "values": [250, 500, 750, 1000, 1500, 2000, 2500, 5000], "suffix": " Sancs"},
             "weekly_min": {"label": "Weekly Minimum", "kind": "economy", "values": [500, 1000, 1500, 2000, 2500, 5000], "suffix": " Sancs"},
             "weekly_max": {"label": "Weekly Maximum", "kind": "economy", "values": [1000, 2000, 3000, 5000, 7500, 10000], "suffix": " Sancs"},
+        },
+    },
+    "events": {
+        "title": "Event Settings",
+        "items": {
+            "event_card_chance": {"label": "Event Card Chance", "kind": "event", "values": [0, 1, 2, 5, 10, 15, 20, 25, 30, 40, 50], "suffix": "%"},
         },
     },
     "crates": {
@@ -6907,6 +6957,8 @@ def get_setting_current_value(snapshot, key, kind):
         return snapshot["economy"].get(key)
     if kind == "crate":
         return snapshot["crate"].get(key)
+    if kind == "event":
+        return snapshot["event"].get(key)
     return None
 
 async def apply_simple_setting(guild_id, key, kind, value):
@@ -6923,6 +6975,9 @@ async def apply_simple_setting(guild_id, key, kind, value):
         await set_economy_setting_db(guild_id, key, value)
     elif kind == "crate":
         await set_crate_setting_db(guild_id, key, value)
+    elif kind == "event":
+        if key == "event_card_chance":
+            await set_event_card_chance_db(guild_id, value)
 
 async def create_settings_embed(guild_id, section="status"):
     snapshot = await get_settings_snapshot(guild_id)
@@ -6938,16 +6993,19 @@ async def create_settings_embed(guild_id, section="status"):
     embed = discord.Embed(title=titles.get(section, "Settings"), color=discord.Color.from_str("#9e659d"))
 
     if section == "status":
-        embed.description = "Use the dropdown to view each section. Simple edits use dropdowns only — no pop-up windows."
+        embed.description = "Use the dropdown to view each section."
         embed.add_field(name="Drops", value=f"**Interval:** {snapshot['drop']['auto_drop_minutes']} minutes\n**Chance:** {snapshot['drop']['auto_drop_chance']}%\n**Cooldown:** {snapshot['drop']['claim_cooldown_seconds']} seconds", inline=False)
-        embed.add_field(name="Rarity", value=f"**Common:** {snapshot['rarity']['common_chance']}\n**Rare:** {snapshot['rarity']['rare_chance']}\n**Epic:** {snapshot['rarity']['epic_chance']}\n**Legendary:** {snapshot['rarity']['legendary_chance']}\n**Limited:** {snapshot['rarity']['custom_chance']}", inline=False)
+        embed.add_field(name="Rarity", value=f"**Common:** {snapshot['rarity']['common_chance']}\n**Rare:** {snapshot['rarity']['rare_chance']}\n**Epic:** {snapshot['rarity']['epic_chance']}\n**Legendary:** {snapshot['rarity']['legendary_chance']}", inline=False)
     elif section in SETTING_OPTIONS:
         lines = []
         for key, meta in SETTING_OPTIONS[section]["items"].items():
             current = get_setting_current_value(snapshot, key, meta["kind"])
             lines.append(f"**{meta['label']}:** {current}{meta['suffix']}")
         embed.description = "\n".join(lines)
-        embed.set_footer(text="Use the edit dropdowns below to change these values.")
+        if section == "rarity":
+            embed.set_footer(text="Common, Rare, Epic, and Legendary should total 100.")
+        else:
+            embed.set_footer(text="Use the edit dropdowns below to change these values.")
     elif section == "events":
         event = snapshot["event"]
         embed.description = f"**Name:** {event['event_name']}\n**Theme:** {event['event_theme']}\n**Type:** {event['event_type']}\n**Launched:** {format_on_off(event['event_launched'])}\n**Event Drops:** {format_on_off(event['event_only_drops'])}\n**Event Boosts:** {format_on_off(event['event_boosts_enabled'])}"
@@ -6985,7 +7043,15 @@ class SettingsFieldSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         field = self.values[0]
-        await interaction.response.edit_message(embed=await create_settings_embed(interaction.guild.id, self.section), view=SettingsValueView(self.section, field))
+        meta = SETTING_OPTIONS[self.section]["items"][field]
+
+        embed = discord.Embed(
+            title=f"Edit {meta['label']}",
+            description="Choose a value below, or press Back to return.",
+            color=discord.Color.from_str("#9e659d")
+        )
+
+        await interaction.response.edit_message(embed=embed, view=SettingsValueView(self.section, field))
 
 class SettingsValueSelect(discord.ui.Select):
     def __init__(self, section, field):
@@ -7012,10 +7078,21 @@ class SettingsPanelView(discord.ui.View):
         if section in SETTING_OPTIONS:
             self.add_item(SettingsFieldSelect(section))
 
+class SettingsBackButton(discord.ui.Button):
+    def __init__(self, section):
+        super().__init__(label="Back", style=discord.ButtonStyle.secondary)
+        self.section = section
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(
+            embed=await create_settings_embed(interaction.guild.id, self.section),
+            view=SettingsPanelView(self.section)
+        )
+
 class SettingsValueView(discord.ui.View):
     def __init__(self, section, field):
         super().__init__(timeout=300)
-        self.add_item(SettingsSectionSelect(section))
+        self.add_item(SettingsBackButton(section))
         self.add_item(SettingsValueSelect(section, field))
 
 @bot.tree.command(name="settings", description="Admin only: view and edit bot settings.")
