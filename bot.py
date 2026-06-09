@@ -4934,18 +4934,6 @@ async def on_app_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message(message, ephemeral=True)
 
 # ---------------- COMMANDS ----------------
-@bot.tree.command(name="settings", description="Admin only: view and edit bot game settings.")
-@app_commands.default_permissions(administrator=True)
-async def settings(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
-
-    await interaction.response.send_message(
-        embed=await create_settings_home_embed(interaction.guild.id),
-        view=SanctionSettingsView(),
-        ephemeral=True
-    )
-
 @bot.tree.command(name="ping", description="Staff only: check if the bot is online.")
 @app_commands.default_permissions(manage_messages=True)
 async def ping(interaction: discord.Interaction):
@@ -5740,7 +5728,7 @@ async def trade(interaction: discord.Interaction, user: discord.Member, your_car
     await interaction.followup.send(embed=view.create_embed(), view=view)
 
 @bot.tree.command(name="addcard", description="Staff only: add or reactivate a collectible card.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(
     name="Card name",
     rarity="Card rarity",
@@ -5763,6 +5751,9 @@ async def addcard(
     image: str,
     custom_type: Optional[str] = None
 ):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -5862,10 +5853,13 @@ async def dropcard(
     )
 
 @bot.tree.command(name="removecard", description="Staff only: remove a card from future drops.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(card_name="Choose the card to remove")
 @app_commands.autocomplete(card_name=all_active_cards_autocomplete)
 async def removecard(interaction: discord.Interaction, card_name: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     card = await get_active_card_by_ref(card_name)
@@ -5891,12 +5885,15 @@ async def removecard(interaction: discord.Interaction, card_name: str):
     )
 
 @bot.tree.command(name="addtitle", description="Staff only: add a preset title to the shop.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(
     title="Title text to sell",
     price="Price in Sancs"
 )
 async def addtitle(interaction: discord.Interaction, title: str, price: int):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -5910,10 +5907,13 @@ async def addtitle(interaction: discord.Interaction, title: str, price: int):
     )
 
 @bot.tree.command(name="removetitle", description="Staff only: remove a preset title from the shop.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(title="Title to remove")
 @app_commands.autocomplete(title=shop_title_autocomplete)
 async def removetitle(interaction: discord.Interaction, title: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -5970,13 +5970,16 @@ async def listtitles(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="addprofileemoji", description="Staff only: add a preset profile emoji to the shop.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(
     name="Emoji display name",
     emoji="Emoji to sell",
     price="Price in Sancs"
 )
 async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: str, price: int):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -5990,10 +5993,13 @@ async def addprofileemoji(interaction: discord.Interaction, name: str, emoji: st
     )
 
 @bot.tree.command(name="removeprofileemoji", description="Staff only: remove a preset profile emoji from the shop.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(name="Profile emoji to remove")
 @app_commands.autocomplete(name=profile_emoji_shop_autocomplete)
 async def removeprofileemoji(interaction: discord.Interaction, name: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -6127,9 +6133,12 @@ async def addropchannel(interaction: discord.Interaction, channel: discord.TextC
     )
 
 @bot.tree.command(name="removedropchannel", description="Staff only: remove a channel from automatic card drops.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(channel="Channel to remove from automatic drops")
 async def removedropchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     await remove_drop_channel_db(interaction.guild.id, channel.id)
@@ -6431,7 +6440,7 @@ def create_staff_help_embed(section="staff"):
         embed.add_field(
             name="Collections",
             value=(
-                "`/setticketchannel` - set the collection reward ticket channel.\n"
+                "`/collectionsetup` - view collection setup.\n`/setticketchannel` - set the collection reward ticket channel.\n"
                 "`/setcompletionemoji` - set the collection complete emoji.\n"
                 "`/createset` - create a collection set.\n"
                 "`/addcardtoset` - add a card to a set.\n"
@@ -6472,7 +6481,7 @@ def create_staff_help_embed(section="staff"):
         embed.add_field(
             name="Settings",
             value=(
-                "`/settings` - open the settings panel.\n"
+                "`/settings` - view and edit admin settings.\n"
                 "`/settingsedit` - quickly edit common settings.\n"
                 "`/raritychances` - view rarity weights.\n"
                 "`/setraritychance` - edit rarity weights."
@@ -6637,152 +6646,14 @@ async def eventsetup(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@bot.tree.command(name="setraritychance", description="Admin only: edit card rarity drop chances.")
-@app_commands.default_permissions(administrator=True)
-@app_commands.describe(
-    rarity="Rarity to edit",
-    chance="Chance weight. These are weighted values, not required to total 100."
-)
-@app_commands.choices(
-    rarity=[
-        app_commands.Choice(name="Common", value="common_chance"),
-        app_commands.Choice(name="Rare", value="rare_chance"),
-        app_commands.Choice(name="Epic", value="epic_chance"),
-        app_commands.Choice(name="Legendary", value="legendary_chance"),
-        app_commands.Choice(name="Custom", value="custom_chance"),
-    ]
-)
-async def setraritychance(interaction: discord.Interaction, rarity: app_commands.Choice[str], chance: int):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can edit rarity chances.", ephemeral=True)
-
-    if chance < 0 or chance > 100:
-        return await interaction.response.send_message("Chance must be between 0 and 100.", ephemeral=True)
-
-    await set_rarity_setting_db(interaction.guild.id, rarity.value, chance)
-    settings = await get_rarity_settings(interaction.guild.id)
-
-    embed = discord.Embed(
-        title="Rarity Chances Updated",
-        description=(
-            f"**Common:** {settings['common_chance']}\n"
-            f"**Rare:** {settings['rare_chance']}\n"
-            f"**Epic:** {settings['epic_chance']}\n"
-            f"**Legendary:** {settings['legendary_chance']}\n"
-            f"**Custom:** {settings['custom_chance']}\n\n"
-            "These are weighted values, so they do not have to total exactly 100."
-        ),
-        color=discord.Color.from_str("#9e659d")
-    )
-
-    await send_staff_log(
-        interaction.guild,
-        "Rarity Chance Updated",
-        f"**Rarity:** {rarity.name}\n**New value:** {chance}\n**Updated by:** {interaction.user.mention}",
-        discord.Color.from_str("#9e659d")
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="raritychances", description="Staff only: view current card rarity drop chances.")
-@app_commands.default_permissions(manage_messages=True)
-async def raritychances(interaction: discord.Interaction):
-    if not await is_staff_member(interaction):
-        return await interaction.response.send_message("No permission.", ephemeral=True)
-
-    settings = await get_rarity_settings(interaction.guild.id)
-
-    embed = discord.Embed(
-        title="Current Rarity Chances",
-        description=(
-            f"**Common:** {settings['common_chance']}\n"
-            f"**Rare:** {settings['rare_chance']}\n"
-            f"**Epic:** {settings['epic_chance']}\n"
-            f"**Legendary:** {settings['legendary_chance']}\n"
-            f"**Custom:** {settings['custom_chance']}\n\n"
-            "These are weighted values used when selecting random cards."
-        ),
-        color=discord.Color.from_str("#9e659d")
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-@bot.tree.command(name="settingsedit", description="Admin only: quickly edit common bot settings.")
-@app_commands.default_permissions(administrator=True)
-@app_commands.describe(setting="The setting to edit", value="The new number value")
-@app_commands.choices(
-    setting=[
-        app_commands.Choice(name="Drop Chance", value="drop_chance"),
-        app_commands.Choice(name="Drop Minutes", value="drop_minutes"),
-        app_commands.Choice(name="Claim Cooldown", value="claim_cooldown"),
-        app_commands.Choice(name="Common Rarity Chance", value="common_chance"),
-        app_commands.Choice(name="Rare Rarity Chance", value="rare_chance"),
-        app_commands.Choice(name="Epic Rarity Chance", value="epic_chance"),
-        app_commands.Choice(name="Legendary Rarity Chance", value="legendary_chance"),
-        app_commands.Choice(name="Limited Rarity Chance", value="custom_chance"),
-        app_commands.Choice(name="Daily Minimum", value="daily_min"),
-        app_commands.Choice(name="Daily Maximum", value="daily_max"),
-        app_commands.Choice(name="Weekly Minimum", value="weekly_min"),
-        app_commands.Choice(name="Weekly Maximum", value="weekly_max"),
-        app_commands.Choice(name="Regular Crate Minimum", value="regular_crate_min"),
-        app_commands.Choice(name="Regular Crate Maximum", value="regular_crate_max"),
-        app_commands.Choice(name="Legendary Crate Minimum", value="legendary_crate_min"),
-        app_commands.Choice(name="Legendary Crate Maximum", value="legendary_crate_max"),
-        app_commands.Choice(name="Legendary Bonus Card Chance", value="legendary_second_card_chance"),
-    ]
-)
-async def settingsedit(interaction: discord.Interaction, setting: app_commands.Choice[str], value: int):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
-
-    if value < 0:
-        return await interaction.response.send_message("Value cannot be negative.", ephemeral=True)
-
-    rarity_settings = {"common_chance", "rare_chance", "epic_chance", "legendary_chance", "custom_chance"}
-    economy_settings = {"daily_min", "daily_max", "weekly_min", "weekly_max"}
-    crate_settings = {
-        "regular_crate_min",
-        "regular_crate_max",
-        "legendary_crate_min",
-        "legendary_crate_max",
-        "legendary_second_card_chance",
-    }
-
-    if setting.value == "drop_chance":
-        if value > 100:
-            return await interaction.response.send_message("Drop chance must be between 0 and 100.", ephemeral=True)
-        await set_auto_drop_chance_db(interaction.guild.id, value)
-    elif setting.value == "drop_minutes":
-        await set_auto_drop_minutes_db(interaction.guild.id, value)
-    elif setting.value == "claim_cooldown":
-        await set_claim_cooldown_db(interaction.guild.id, value)
-    elif setting.value in rarity_settings:
-        if value > 100:
-            return await interaction.response.send_message("Rarity chance must be between 0 and 100.", ephemeral=True)
-        await set_rarity_setting_db(interaction.guild.id, setting.value, value)
-    elif setting.value in economy_settings:
-        await set_economy_setting_db(interaction.guild.id, setting.value, value)
-    elif setting.value in crate_settings:
-        if "chance" in setting.value and value > 100:
-            return await interaction.response.send_message("Chance must be between 0 and 100.", ephemeral=True)
-        await set_crate_setting_db(interaction.guild.id, setting.value, value)
-    else:
-        return await interaction.response.send_message("Unknown setting.", ephemeral=True)
-
-    await send_staff_log(
-        interaction.guild,
-        "Setting Updated",
-        f"**Setting:** {setting.name}\n**New value:** {value}\n**Updated by:** {interaction.user.mention}",
-        discord.Color.from_str("#9e659d")
-    )
-
-    await interaction.response.send_message(f"Updated **{setting.name}** to **{value}**.", ephemeral=True)
-
 @bot.tree.command(name="seteventcard", description="Staff only: mark a card as a locked event card.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(card="Card to mark as event", event_name="Event name for this card")
 @app_commands.autocomplete(card=active_card_autocomplete)
 async def seteventcard(interaction: discord.Interaction, card: str, event_name: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -6806,10 +6677,13 @@ async def seteventcard(interaction: discord.Interaction, card: str, event_name: 
     )
 
 @bot.tree.command(name="removeeventcard", description="Staff only: remove event-card lock from a card.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.describe(card="Card to unlock")
 @app_commands.autocomplete(card=event_card_autocomplete)
 async def removeeventcard(interaction: discord.Interaction, card: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
 
@@ -6833,8 +6707,11 @@ async def removeeventcard(interaction: discord.Interaction, card: str):
     )
 
 @bot.tree.command(name="setticketchannel", description="Staff only: set the ticket channel for collection rewards.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 async def setticketchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     await set_collection_ticket_channel_db(interaction.guild.id, channel.id)
@@ -6842,8 +6719,11 @@ async def setticketchannel(interaction: discord.Interaction, channel: discord.Te
     await interaction.response.send_message(f"Collection reward ticket channel set to {channel.mention}.", ephemeral=True)
 
 @bot.tree.command(name="setcompletionemoji", description="Staff only: set the emoji for completed collections.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 async def setcompletionemoji(interaction: discord.Interaction, emoji: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     await set_collection_completion_emoji_db(interaction.guild.id, emoji)
@@ -6851,8 +6731,11 @@ async def setcompletionemoji(interaction: discord.Interaction, emoji: str):
     await interaction.response.send_message(f"Collection completion emoji set to {emoji}.", ephemeral=True)
 
 @bot.tree.command(name="createset", description="Staff only: create a card collection set.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 async def createset(interaction: discord.Interaction, name: str, reward_text: str = "Open a ticket to claim your reward."):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     async with db_pool.acquire() as conn:
@@ -6867,9 +6750,12 @@ async def createset(interaction: discord.Interaction, name: str, reward_text: st
     await interaction.response.send_message(f"Created set **{name}**.", ephemeral=True)
 
 @bot.tree.command(name="addcardtoset", description="Staff only: add a card to a collection set.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.autocomplete(set_name=card_set_autocomplete, card=active_card_autocomplete)
 async def addcardtoset(interaction: discord.Interaction, set_name: str, card: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
@@ -6884,9 +6770,12 @@ async def addcardtoset(interaction: discord.Interaction, set_name: str, card: st
     await interaction.response.send_message(f"Added **{card_row['name']}** to **{card_set['name']}**.", ephemeral=True)
 
 @bot.tree.command(name="removecardfromset", description="Staff only: remove a card from a collection set.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(administrator=True)
 @app_commands.autocomplete(set_name=card_set_autocomplete, card=active_card_autocomplete)
 async def removecardfromset(interaction: discord.Interaction, set_name: str, card: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
@@ -6904,26 +6793,29 @@ async def removecardfromset(interaction: discord.Interaction, set_name: str, car
 @app_commands.autocomplete(set_name=card_set_autocomplete)
 async def viewset(interaction: discord.Interaction, set_name: str):
     card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
+
     if not card_set:
         return await interaction.response.send_message("Set not found.", ephemeral=True)
+
     cards = await get_cards_in_set(card_set["id"])
     complete, owned_count, total_count = await user_owns_all_cards_in_set(interaction.user.id, card_set["id"])
+
     if not cards:
         card_text = "No cards have been added to this set yet."
     else:
         lines = []
         for card in cards:
             owned = await user_owns_card(interaction.user.id, card["id"])
-            marker = "✅" if owned else "⬜"
-            lines.append(f"{marker} **ID:** `{card['id']}` {card['name']} ({format_card_type_public(card)})")
+            marker = "♥" if owned else "♡"
+            lines.append(f"{marker} {card['name']}")
         card_text = "\n".join(lines)
-    settings = await get_collection_settings(interaction.guild.id)
-    ticket_text = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "Not set"
+
     embed = discord.Embed(
         title=f"{card_set['name']} Collection",
-        description=f"**Progress:** {owned_count}/{total_count}\n**Reward:** {card_set['reward_text']}\n**Ticket Channel:** {ticket_text}\n\n{card_text}",
+        description=f"**Progress:** {owned_count}/{total_count}\n\n**Cards**\n{card_text}",
         color=discord.Color.from_str("#9e659d")
     )
+
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="cardsets", description="View available card collection sets.")
@@ -6955,6 +6847,229 @@ async def unequiptitle(interaction: discord.Interaction):
 async def unequipemoji(interaction: discord.Interaction):
     await clear_user_custom_emoji(interaction.user.id)
     await interaction.response.send_message("Your profile emoji has been unequipped.", ephemeral=True)
+
+SETTING_OPTIONS = {
+    "drops": {
+        "title": "Drops Settings",
+        "items": {
+            "auto_drop_minutes": {"label": "Drop Interval", "kind": "drop", "values": [5, 10, 15, 20, 30, 45, 60, 90, 120], "suffix": " minutes"},
+            "auto_drop_chance": {"label": "Drop Chance", "kind": "drop", "values": [0, 5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100], "suffix": "%"},
+            "claim_cooldown_seconds": {"label": "Claim Cooldown", "kind": "drop", "values": [0, 10, 15, 30, 45, 60, 90, 120, 300], "suffix": " seconds"},
+        },
+    },
+    "rarity": {
+        "title": "Rarity Settings",
+        "items": {
+            "common_chance": {"label": "Common", "kind": "rarity", "values": [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], "suffix": ""},
+            "rare_chance": {"label": "Rare", "kind": "rarity", "values": [0, 5, 10, 15, 20, 25, 30, 40, 50], "suffix": ""},
+            "epic_chance": {"label": "Epic", "kind": "rarity", "values": [0, 1, 2, 3, 5, 8, 10, 15, 20, 25], "suffix": ""},
+            "legendary_chance": {"label": "Legendary", "kind": "rarity", "values": [0, 1, 2, 3, 5, 8, 10, 15], "suffix": ""},
+            "custom_chance": {"label": "Limited", "kind": "rarity", "values": [0, 1, 2, 3, 5, 8, 10, 15, 20, 25], "suffix": ""},
+        },
+    },
+    "economy": {
+        "title": "Economy Settings",
+        "items": {
+            "daily_min": {"label": "Daily Minimum", "kind": "economy", "values": [50, 100, 150, 200, 250, 500, 750, 1000], "suffix": " Sancs"},
+            "daily_max": {"label": "Daily Maximum", "kind": "economy", "values": [250, 500, 750, 1000, 1500, 2000, 2500, 5000], "suffix": " Sancs"},
+            "weekly_min": {"label": "Weekly Minimum", "kind": "economy", "values": [500, 1000, 1500, 2000, 2500, 5000], "suffix": " Sancs"},
+            "weekly_max": {"label": "Weekly Maximum", "kind": "economy", "values": [1000, 2000, 3000, 5000, 7500, 10000], "suffix": " Sancs"},
+        },
+    },
+    "crates": {
+        "title": "Crate Settings",
+        "items": {
+            "regular_crate_min": {"label": "Regular Crate Minimum", "kind": "crate", "values": [50, 100, 250, 500, 750, 1000], "suffix": " Sancs"},
+            "regular_crate_max": {"label": "Regular Crate Maximum", "kind": "crate", "values": [250, 500, 750, 1000, 1500, 2000], "suffix": " Sancs"},
+            "legendary_crate_min": {"label": "Legendary Crate Minimum", "kind": "crate", "values": [500, 750, 1000, 1500, 2000, 2500], "suffix": " Sancs"},
+            "legendary_crate_max": {"label": "Legendary Crate Maximum", "kind": "crate", "values": [1500, 2000, 2500, 3000, 5000, 7500], "suffix": " Sancs"},
+            "legendary_second_card_chance": {"label": "Legendary Bonus Card Chance", "kind": "crate", "values": [0, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100], "suffix": "%"},
+        },
+    },
+}
+
+async def get_settings_snapshot(guild_id):
+    return {
+        "drop": await get_drop_settings(guild_id),
+        "rarity": await get_rarity_settings(guild_id),
+        "economy": await get_economy_settings(guild_id),
+        "crate": await get_crate_settings(guild_id),
+        "event": await get_event_settings(guild_id),
+        "collection": await get_collection_settings(guild_id),
+    }
+
+def get_setting_current_value(snapshot, key, kind):
+    if kind == "drop":
+        return snapshot["drop"].get(key)
+    if kind == "rarity":
+        return snapshot["rarity"].get(key)
+    if kind == "economy":
+        return snapshot["economy"].get(key)
+    if kind == "crate":
+        return snapshot["crate"].get(key)
+    return None
+
+async def apply_simple_setting(guild_id, key, kind, value):
+    if kind == "drop":
+        if key == "auto_drop_minutes":
+            await set_auto_drop_minutes_db(guild_id, value)
+        elif key == "auto_drop_chance":
+            await set_auto_drop_chance_db(guild_id, value)
+        elif key == "claim_cooldown_seconds":
+            await set_claim_cooldown_db(guild_id, value)
+    elif kind == "rarity":
+        await set_rarity_setting_db(guild_id, key, value)
+    elif kind == "economy":
+        await set_economy_setting_db(guild_id, key, value)
+    elif kind == "crate":
+        await set_crate_setting_db(guild_id, key, value)
+
+async def create_settings_embed(guild_id, section="status"):
+    snapshot = await get_settings_snapshot(guild_id)
+    titles = {
+        "status": "Settings Status",
+        "drops": "Drops Settings",
+        "rarity": "Rarity Settings",
+        "economy": "Economy Settings",
+        "crates": "Crate Settings",
+        "events": "Event Settings",
+        "collections": "Collection Settings",
+    }
+    embed = discord.Embed(title=titles.get(section, "Settings"), color=discord.Color.from_str("#9e659d"))
+
+    if section == "status":
+        embed.description = "Use the dropdown to view each section. Simple edits use dropdowns only — no pop-up windows."
+        embed.add_field(name="Drops", value=f"**Interval:** {snapshot['drop']['auto_drop_minutes']} minutes\n**Chance:** {snapshot['drop']['auto_drop_chance']}%\n**Cooldown:** {snapshot['drop']['claim_cooldown_seconds']} seconds", inline=False)
+        embed.add_field(name="Rarity", value=f"**Common:** {snapshot['rarity']['common_chance']}\n**Rare:** {snapshot['rarity']['rare_chance']}\n**Epic:** {snapshot['rarity']['epic_chance']}\n**Legendary:** {snapshot['rarity']['legendary_chance']}\n**Limited:** {snapshot['rarity']['custom_chance']}", inline=False)
+    elif section in SETTING_OPTIONS:
+        lines = []
+        for key, meta in SETTING_OPTIONS[section]["items"].items():
+            current = get_setting_current_value(snapshot, key, meta["kind"])
+            lines.append(f"**{meta['label']}:** {current}{meta['suffix']}")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text="Use the edit dropdowns below to change these values.")
+    elif section == "events":
+        event = snapshot["event"]
+        embed.description = f"**Name:** {event['event_name']}\n**Theme:** {event['event_theme']}\n**Type:** {event['event_type']}\n**Launched:** {format_on_off(event['event_launched'])}\n**Event Drops:** {format_on_off(event['event_only_drops'])}\n**Event Boosts:** {format_on_off(event['event_boosts_enabled'])}"
+        embed.set_footer(text="Use /eventsetup for event name/theme/launch controls.")
+    elif section == "collections":
+        collection = snapshot["collection"]
+        ticket = f"<#{collection['ticket_channel_id']}>" if collection.get("ticket_channel_id") else "Not set"
+        embed.description = f"**Ticket Channel:** {ticket}\n**Completion Emoji:** {collection.get('completion_emoji') or '🎉'}"
+        embed.set_footer(text="Use /collectionsetup for collection controls.")
+
+    return embed
+
+class SettingsSectionSelect(discord.ui.Select):
+    def __init__(self, current_section="status"):
+        options = [
+            discord.SelectOption(label="Status", value="status"),
+            discord.SelectOption(label="Drops", value="drops"),
+            discord.SelectOption(label="Rarity", value="rarity"),
+            discord.SelectOption(label="Economy", value="economy"),
+            discord.SelectOption(label="Crates", value="crates"),
+            discord.SelectOption(label="Events", value="events"),
+            discord.SelectOption(label="Collections", value="collections"),
+        ]
+        super().__init__(placeholder="Choose a settings section...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        section = self.values[0]
+        await interaction.response.edit_message(embed=await create_settings_embed(interaction.guild.id, section), view=SettingsPanelView(section))
+
+class SettingsFieldSelect(discord.ui.Select):
+    def __init__(self, section):
+        self.section = section
+        options = [discord.SelectOption(label=meta["label"], value=key) for key, meta in SETTING_OPTIONS.get(section, {}).get("items", {}).items()]
+        super().__init__(placeholder="Choose what to edit...", min_values=1, max_values=1, options=options[:25])
+
+    async def callback(self, interaction: discord.Interaction):
+        field = self.values[0]
+        await interaction.response.edit_message(embed=await create_settings_embed(interaction.guild.id, self.section), view=SettingsValueView(self.section, field))
+
+class SettingsValueSelect(discord.ui.Select):
+    def __init__(self, section, field):
+        self.section = section
+        self.field = field
+        meta = SETTING_OPTIONS[section]["items"][field]
+        options = [discord.SelectOption(label=f"{value}{meta['suffix']}", value=str(value)) for value in meta["values"]]
+        super().__init__(placeholder=f"Choose {meta['label']} value...", min_values=1, max_values=1, options=options[:25])
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
+
+        value = int(self.values[0])
+        meta = SETTING_OPTIONS[self.section]["items"][self.field]
+        await apply_simple_setting(interaction.guild.id, self.field, meta["kind"], value)
+        await send_staff_log(interaction.guild, "Setting Updated", f"**Setting:** {meta['label']}\n**New value:** {value}{meta['suffix']}\n**Updated by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
+        await interaction.response.edit_message(embed=await create_settings_embed(interaction.guild.id, self.section), view=SettingsPanelView(self.section))
+
+class SettingsPanelView(discord.ui.View):
+    def __init__(self, section="status"):
+        super().__init__(timeout=300)
+        self.add_item(SettingsSectionSelect(section))
+        if section in SETTING_OPTIONS:
+            self.add_item(SettingsFieldSelect(section))
+
+class SettingsValueView(discord.ui.View):
+    def __init__(self, section, field):
+        super().__init__(timeout=300)
+        self.add_item(SettingsSectionSelect(section))
+        self.add_item(SettingsValueSelect(section, field))
+
+@bot.tree.command(name="settings", description="Admin only: view and edit bot settings.")
+@app_commands.default_permissions(administrator=True)
+async def settings(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
+
+    await interaction.response.send_message(embed=await create_settings_embed(interaction.guild.id, "status"), view=SettingsPanelView("status"), ephemeral=True)
+
+class CollectionSetupSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="View Collection Settings", value="view"),
+            discord.SelectOption(label="Ticket Channel Info", value="ticket"),
+            discord.SelectOption(label="Completion Emoji Info", value="emoji"),
+            discord.SelectOption(label="Collection Commands", value="commands"),
+        ]
+        super().__init__(placeholder="Choose a collection setup section...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        value = self.values[0]
+        settings = await get_collection_settings(interaction.guild.id)
+        ticket = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "Not set"
+        emoji = settings.get("completion_emoji") or "🎉"
+        embed = discord.Embed(title="Collection Setup", color=discord.Color.from_str("#9e659d"))
+
+        if value == "view":
+            embed.description = f"**Ticket Channel:** {ticket}\n**Completion Emoji:** {emoji}"
+        elif value == "ticket":
+            embed.description = f"Use `/setticketchannel` to set the collection reward ticket channel.\n**Current:** {ticket}"
+        elif value == "emoji":
+            embed.description = f"Use `/setcompletionemoji` to change the collection completion emoji.\n**Current:** {emoji}"
+        elif value == "commands":
+            embed.description = "`/createset`\n`/addcardtoset`\n`/removecardfromset`\n`/viewset`\n`/cardsets`"
+
+        await interaction.response.edit_message(embed=embed, view=self.view)
+
+class CollectionSetupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(CollectionSetupSelect())
+
+@bot.tree.command(name="collectionsetup", description="Admin only: view collection setup options.")
+@app_commands.default_permissions(administrator=True)
+async def collectionsetup(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use collection setup.", ephemeral=True)
+
+    settings = await get_collection_settings(interaction.guild.id)
+    ticket = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "Not set"
+    emoji = settings.get("completion_emoji") or "🎉"
+    embed = discord.Embed(title="Collection Setup", description=f"**Ticket Channel:** {ticket}\n**Completion Emoji:** {emoji}\n\nUse the dropdown below to view setup details.", color=discord.Color.from_str("#9e659d"))
+    await interaction.response.send_message(embed=embed, view=CollectionSetupView(), ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
