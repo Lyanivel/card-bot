@@ -611,6 +611,41 @@ async def setup_database():
             ADD COLUMN IF NOT EXISTS snipe_mute_minutes BIGINT DEFAULT 5;
         """)
 
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS card_sets (
+                id SERIAL PRIMARY KEY,
+                guild_id BIGINT NOT NULL,
+                name TEXT NOT NULL,
+                reward_text TEXT DEFAULT 'Open a ticket to claim your reward.',
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (guild_id, name)
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS card_set_cards (
+                set_id INTEGER NOT NULL REFERENCES card_sets(id) ON DELETE CASCADE,
+                card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+                PRIMARY KEY (set_id, card_id)
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS completed_card_sets (
+                guild_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                set_id INTEGER NOT NULL REFERENCES card_sets(id) ON DELETE CASCADE,
+                completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (guild_id, user_id, set_id)
+            );
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS collection_settings (
+                guild_id BIGINT PRIMARY KEY,
+                ticket_channel_id BIGINT,
+                completion_emoji TEXT DEFAULT '🎉'
+            );
+        """)
+
 # ---------------- HELPERS ----------------
 def is_staff(member: discord.Member):
     return any(role.id == STAFF_ROLE_ID for role in member.roles)
@@ -1918,6 +1953,14 @@ async def set_title(user_id, title):
             DO UPDATE SET title=$2
         """, user_id, title)
 
+async def clear_user_custom_emoji(user_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM user_custom_emojis WHERE user_id=$1", user_id)
+
+async def clear_user_title(user_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM user_titles WHERE user_id=$1", user_id)
+
 async def set_user_custom_emoji(user_id, emoji):
     async with db_pool.acquire() as conn:
         await conn.execute("""
@@ -1946,11 +1989,15 @@ async def add_profile_emoji_to_shop(name, emoji, price):
 
 async def remove_profile_emoji_from_shop(name):
     async with db_pool.acquire() as conn:
-        result = await conn.execute(
-            "UPDATE profile_emojis SET is_active=FALSE WHERE LOWER(name)=LOWER($1)",
-            name
-        )
-        return result.endswith("1")
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT id FROM profile_emojis WHERE LOWER(name)=LOWER($1)", name)
+            result = await conn.execute(
+                "UPDATE profile_emojis SET is_active=FALSE WHERE LOWER(name)=LOWER($1)",
+                name
+            )
+            if row:
+                await conn.execute("DELETE FROM user_owned_profile_emojis WHERE profile_emoji_id=$1", row["id"])
+            return result.endswith("1")
 
 async def get_active_profile_emojis():
     async with db_pool.acquire() as conn:
@@ -2020,11 +2067,14 @@ async def add_title_to_shop(title, price):
 
 async def remove_title_from_shop(title):
     async with db_pool.acquire() as conn:
-        result = await conn.execute(
-            "UPDATE shop_titles SET is_active=FALSE WHERE LOWER(title)=LOWER($1)",
-            title
-        )
-        return result.endswith("1")
+        async with conn.transaction():
+            result = await conn.execute(
+                "UPDATE shop_titles SET is_active=FALSE WHERE LOWER(title)=LOWER($1)",
+                title
+            )
+            await conn.execute("DELETE FROM user_titles WHERE LOWER(title)=LOWER($1)", title)
+            await conn.execute("DELETE FROM user_owned_titles WHERE LOWER(title)=LOWER($1)", title)
+            return result.endswith("1")
 
 async def get_active_shop_titles():
     async with db_pool.acquire() as conn:
@@ -4508,7 +4558,7 @@ async def profile_emoji_shop_autocomplete(interaction: discord.Interaction, curr
     choices = []
 
     for row in rows:
-        label = f"{row['emoji']} {row['name']}"
+        label = row["name"]
 
         if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
             continue
@@ -4526,7 +4576,7 @@ async def owned_profile_emoji_autocomplete(interaction: discord.Interaction, cur
     choices = []
 
     for row in rows:
-        label = f"{row['emoji']} {row['name']}"
+        label = row["name"]
 
         if current and current not in row["name"].lower() and current not in str(row["emoji"]).lower():
             continue
@@ -4599,6 +4649,159 @@ async def get_shop_title_by_ref(ref):
             "SELECT * FROM shop_titles WHERE LOWER(title)=LOWER($1)",
             ref
         )
+
+async def set_card_event_status(card_id, is_event_card: bool, event_name: str = None):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchrow("""
+            UPDATE cards
+            SET is_event_card=$1, event_name=$2
+            WHERE id=$3
+            RETURNING *
+        """, is_event_card, event_name if is_event_card else None, int(card_id))
+
+async def is_event_card_locked_for_user(card, user_id, interaction):
+    try:
+        is_event = bool(card["is_event_card"])
+    except Exception:
+        is_event = False
+
+    if not is_event:
+        return False
+
+    if await is_staff_member(interaction):
+        return False
+
+    return not await user_owns_card(user_id, card["id"])
+
+async def get_collection_settings(guild_id):
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT ticket_channel_id, completion_emoji FROM collection_settings WHERE guild_id=$1",
+            guild_id
+        )
+        if not row:
+            await conn.execute("""
+                INSERT INTO collection_settings (guild_id, ticket_channel_id, completion_emoji)
+                VALUES ($1, NULL, '🎉')
+                ON CONFLICT (guild_id) DO NOTHING
+            """, guild_id)
+            return {"ticket_channel_id": None, "completion_emoji": "🎉"}
+        return dict(row)
+
+async def set_collection_ticket_channel_db(guild_id, channel_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO collection_settings (guild_id, ticket_channel_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET ticket_channel_id=$2
+        """, guild_id, channel_id)
+
+async def set_collection_completion_emoji_db(guild_id, emoji):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO collection_settings (guild_id, completion_emoji)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET completion_emoji=$2
+        """, guild_id, emoji)
+
+async def get_card_set_by_ref(guild_id, ref):
+    ref = str(ref).strip()
+    async with db_pool.acquire() as conn:
+        if ref.isdigit():
+            row = await conn.fetchrow(
+                "SELECT * FROM card_sets WHERE guild_id=$1 AND id=$2 AND is_active=TRUE",
+                guild_id, int(ref)
+            )
+            if row:
+                return row
+        return await conn.fetchrow(
+            "SELECT * FROM card_sets WHERE guild_id=$1 AND LOWER(name)=LOWER($2) AND is_active=TRUE",
+            guild_id, ref
+        )
+
+async def card_set_autocomplete(interaction: discord.Interaction, current: str):
+    current = current.lower()
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name",
+            interaction.guild.id
+        )
+    choices = []
+    for row in rows:
+        if current and current not in row["name"].lower():
+            continue
+        choices.append(app_commands.Choice(name=row["name"][:100], value=str(row["id"])))
+        if len(choices) >= 25:
+            break
+    return choices
+
+async def get_cards_in_set(set_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetch("""
+            SELECT cards.*
+            FROM card_set_cards
+            JOIN cards ON cards.id = card_set_cards.card_id
+            WHERE card_set_cards.set_id=$1
+            ORDER BY cards.rarity, cards.id
+        """, set_id)
+
+async def user_owns_all_cards_in_set(user_id, set_id):
+    cards = await get_cards_in_set(set_id)
+    if not cards:
+        return False, 0, 0
+    owned_count = 0
+    for card in cards:
+        if await user_owns_card(user_id, card["id"]):
+            owned_count += 1
+    return owned_count == len(cards), owned_count, len(cards)
+
+async def mark_set_completed_once(guild_id, user_id, set_id):
+    async with db_pool.acquire() as conn:
+        result = await conn.execute("""
+            INSERT INTO completed_card_sets (guild_id, user_id, set_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT DO NOTHING
+        """, guild_id, user_id, set_id)
+    return result.endswith("1")
+
+async def notify_completed_sets(interaction, user_id):
+    if not interaction or not interaction.guild:
+        return
+    async with db_pool.acquire() as conn:
+        sets = await conn.fetch(
+            "SELECT * FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name",
+            interaction.guild.id
+        )
+    if not sets:
+        return
+    settings = await get_collection_settings(interaction.guild.id)
+    ticket_text = f"\nOpen a ticket here: <#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "\nOpen a ticket to claim your reward."
+    for card_set in sets:
+        complete, owned_count, total_count = await user_owns_all_cards_in_set(user_id, card_set["id"])
+        if not complete:
+            continue
+        is_new = await mark_set_completed_once(interaction.guild.id, user_id, card_set["id"])
+        if not is_new:
+            continue
+        emoji = settings.get("completion_emoji") or "🎉"
+        embed = discord.Embed(
+            title=f"{emoji} Collection Complete!",
+            description=(
+                f"<@{user_id}> completed **{card_set['name']}**.\n"
+                f"**Reward:** {card_set['reward_text']}"
+                f"{ticket_text}"
+            ),
+            color=discord.Color.from_str("#9e659d")
+        )
+        try:
+            await interaction.channel.send(embed=embed)
+        except Exception:
+            try:
+                await interaction.followup.send(embed=embed)
+            except Exception:
+                pass
 
 # ---------------- BOT ----------------
 class Bot(discord.Client):
@@ -5250,6 +5453,7 @@ async def cards(interaction: discord.Interaction):
 
 @bot.tree.command(name="inventory", description="View your inventory or another user's inventory.")
 async def inventory(interaction: discord.Interaction, user: discord.Member = None):
+    await interaction.response.defer()
     user = user or interaction.user
 
     bal = await get_balance(user.id)
@@ -5295,10 +5499,11 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
     )
     embed.set_thumbnail(url=INVENTORY_ICON_URL)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 @bot.tree.command(name="cardinventory", description="View only your cards or another user's cards.")
 async def cardinventory(interaction: discord.Interaction, user: discord.Member = None):
+    await interaction.response.defer()
     user = user or interaction.user
 
     title = await get_title(user.id)
@@ -5364,11 +5569,10 @@ async def cardinventory(interaction: discord.Interaction, user: discord.Member =
     if not has_cards:
         embed.description = "No cards yet."
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 async def user_cards_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
-
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
@@ -5377,45 +5581,44 @@ async def user_cards_autocomplete(interaction: discord.Interaction, current: str
             WHERE inventory.user_id=$1
             ORDER BY cards.id
         """, interaction.user.id)
-
     choices = []
-
     for card in rows:
         label = plain_card_label(card)
-
         if current and current not in label.lower() and current not in str(card["id"]):
             continue
-
         choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
-
         if len(choices) >= 25:
             break
-
     return choices
 
 async def all_cards_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
-
+    target_user_id = None
+    try:
+        target = getattr(interaction.namespace, "user", None) or getattr(interaction.namespace, "member", None) or getattr(interaction.namespace, "target", None)
+        if target:
+            target_user_id = target.id
+    except Exception:
+        target_user_id = None
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("""
-            SELECT id, name, rarity, custom_type
-            FROM cards
-            ORDER BY id
-        """)
-
+        if target_user_id:
+            rows = await conn.fetch("""
+                SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
+                FROM inventory
+                JOIN cards ON cards.id = inventory.card_id
+                WHERE inventory.user_id=$1
+                ORDER BY cards.id
+            """, target_user_id)
+        else:
+            rows = await conn.fetch("SELECT id, name, rarity, custom_type FROM cards ORDER BY id")
     choices = []
-
     for card in rows:
         label = plain_card_label(card)
-
         if current and current not in label.lower() and current not in str(card["id"]):
             continue
-
         choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
-
         if len(choices) >= 25:
             break
-
     return choices
 
 @bot.tree.command(name="trade", description="Trade one card with another user.")
@@ -6387,6 +6590,184 @@ async def settingsedit(interaction: discord.Interaction, setting: app_commands.C
     )
 
     await interaction.response.send_message(f"Updated **{setting.name}** to **{value}**.", ephemeral=True)
+
+@bot.tree.command(name="seteventcard", description="Staff only: mark a card as a locked event card.")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(card="Card to mark as event", event_name="Event name for this card")
+@app_commands.autocomplete(card=active_card_autocomplete)
+async def seteventcard(interaction: discord.Interaction, card: str, event_name: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    card_row = await get_card_by_ref(card)
+
+    if not card_row:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+
+    updated = await set_card_event_status(card_row["id"], True, event_name)
+
+    await send_staff_log(
+        interaction.guild,
+        "Event Card Locked",
+        f"**Card:** {updated['name']} (`{updated['id']}`)\n**Event:** {event_name}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(
+        f"Locked **{updated['name']}** as an event card for **{event_name}**.",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="removeeventcard", description="Staff only: remove event-card lock from a card.")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(card="Card to unlock")
+@app_commands.autocomplete(card=active_card_autocomplete)
+async def removeeventcard(interaction: discord.Interaction, card: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+
+    card_row = await get_card_by_ref(card)
+
+    if not card_row:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+
+    updated = await set_card_event_status(card_row["id"], False, None)
+
+    await send_staff_log(
+        interaction.guild,
+        "Event Card Unlocked",
+        f"**Card:** {updated['name']} (`{updated['id']}`)\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(
+        f"Removed event lock from **{updated['name']}**.",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="setticketchannel", description="Staff only: set the ticket channel for collection rewards.")
+@app_commands.default_permissions(manage_messages=True)
+async def setticketchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    await set_collection_ticket_channel_db(interaction.guild.id, channel.id)
+    await send_staff_log(interaction.guild, "Collection Ticket Channel Updated", f"**Channel:** {channel.mention}\n**Updated by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
+    await interaction.response.send_message(f"Collection reward ticket channel set to {channel.mention}.", ephemeral=True)
+
+@bot.tree.command(name="setcompletionemoji", description="Staff only: set the emoji for completed collections.")
+@app_commands.default_permissions(manage_messages=True)
+async def setcompletionemoji(interaction: discord.Interaction, emoji: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    await set_collection_completion_emoji_db(interaction.guild.id, emoji)
+    await send_staff_log(interaction.guild, "Collection Completion Emoji Updated", f"**Emoji:** {emoji}\n**Updated by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
+    await interaction.response.send_message(f"Collection completion emoji set to {emoji}.", ephemeral=True)
+
+@bot.tree.command(name="createset", description="Staff only: create a card collection set.")
+@app_commands.default_permissions(manage_messages=True)
+async def createset(interaction: discord.Interaction, name: str, reward_text: str = "Open a ticket to claim your reward."):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    async with db_pool.acquire() as conn:
+        try:
+            await conn.execute("""
+                INSERT INTO card_sets (guild_id, name, reward_text, is_active)
+                VALUES ($1, $2, $3, TRUE)
+            """, interaction.guild.id, name, reward_text)
+        except Exception:
+            return await interaction.response.send_message("A set with that name already exists.", ephemeral=True)
+    await send_staff_log(interaction.guild, "Card Set Created", f"**Set:** {name}\n**Reward:** {reward_text}\n**Created by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
+    await interaction.response.send_message(f"Created set **{name}**.", ephemeral=True)
+
+@bot.tree.command(name="addcardtoset", description="Staff only: add a card to a collection set.")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.autocomplete(set_name=card_set_autocomplete, card=active_card_autocomplete)
+async def addcardtoset(interaction: discord.Interaction, set_name: str, card: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
+    if not card_set:
+        return await interaction.response.send_message("Set not found.", ephemeral=True)
+    card_row = await get_card_by_ref(card)
+    if not card_row:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+    async with db_pool.acquire() as conn:
+        await conn.execute("INSERT INTO card_set_cards (set_id, card_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", card_set["id"], card_row["id"])
+    await send_staff_log(interaction.guild, "Card Added To Set", f"**Set:** {card_set['name']}\n**Card:** {card_row['name']} (`{card_row['id']}`)\n**Updated by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
+    await interaction.response.send_message(f"Added **{card_row['name']}** to **{card_set['name']}**.", ephemeral=True)
+
+@bot.tree.command(name="removecardfromset", description="Staff only: remove a card from a collection set.")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.autocomplete(set_name=card_set_autocomplete, card=active_card_autocomplete)
+async def removecardfromset(interaction: discord.Interaction, set_name: str, card: str):
+    if not await is_staff_member(interaction):
+        return await interaction.response.send_message("No permission.", ephemeral=True)
+    card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
+    if not card_set:
+        return await interaction.response.send_message("Set not found.", ephemeral=True)
+    card_row = await get_card_by_ref(card)
+    if not card_row:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM card_set_cards WHERE set_id=$1 AND card_id=$2", card_set["id"], card_row["id"])
+    await send_staff_log(interaction.guild, "Card Removed From Set", f"**Set:** {card_set['name']}\n**Card:** {card_row['name']} (`{card_row['id']}`)\n**Updated by:** {interaction.user.mention}", discord.Color.red())
+    await interaction.response.send_message(f"Removed **{card_row['name']}** from **{card_set['name']}**.", ephemeral=True)
+
+@bot.tree.command(name="viewset", description="View a collection set and your progress.")
+@app_commands.autocomplete(set_name=card_set_autocomplete)
+async def viewset(interaction: discord.Interaction, set_name: str):
+    card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
+    if not card_set:
+        return await interaction.response.send_message("Set not found.", ephemeral=True)
+    cards = await get_cards_in_set(card_set["id"])
+    complete, owned_count, total_count = await user_owns_all_cards_in_set(interaction.user.id, card_set["id"])
+    if not cards:
+        card_text = "No cards have been added to this set yet."
+    else:
+        lines = []
+        for card in cards:
+            owned = await user_owns_card(interaction.user.id, card["id"])
+            marker = "✅" if owned else "⬜"
+            lines.append(f"{marker} **ID:** `{card['id']}` {card['name']} ({format_card_type_public(card)})")
+        card_text = "\n".join(lines)
+    settings = await get_collection_settings(interaction.guild.id)
+    ticket_text = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "Not set"
+    embed = discord.Embed(
+        title=f"{card_set['name']} Collection",
+        description=f"**Progress:** {owned_count}/{total_count}\n**Reward:** {card_set['reward_text']}\n**Ticket Channel:** {ticket_text}\n\n{card_text}",
+        color=discord.Color.from_str("#9e659d")
+    )
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="cardsets", description="View available card collection sets.")
+async def cardsets(interaction: discord.Interaction):
+    async with db_pool.acquire() as conn:
+        sets = await conn.fetch("SELECT * FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name", interaction.guild.id)
+    if not sets:
+        return await interaction.response.send_message("No card sets are available right now.", ephemeral=True)
+    lines = []
+    for card_set in sets:
+        complete, owned_count, total_count = await user_owns_all_cards_in_set(interaction.user.id, card_set["id"])
+        status = "✅" if complete else "⬜"
+        lines.append(f"{status} **{card_set['name']}** — {owned_count}/{total_count}")
+    embed = discord.Embed(title="Card Collections", description="\n".join(lines), color=discord.Color.from_str("#9e659d"))
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="checksets", description="Check if you completed any collection rewards.")
+async def checksets(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await notify_completed_sets(interaction, interaction.user.id)
+    await interaction.followup.send("Collection check complete.", ephemeral=True)
+
+@bot.tree.command(name="unequiptitle", description="Remove your currently equipped title.")
+async def unequiptitle(interaction: discord.Interaction):
+    await clear_user_title(interaction.user.id)
+    await interaction.response.send_message("Your title has been unequipped.", ephemeral=True)
+
+@bot.tree.command(name="unequipemoji", description="Remove your currently equipped profile emoji.")
+async def unequipemoji(interaction: discord.Interaction):
+    await clear_user_custom_emoji(interaction.user.id)
+    await interaction.response.send_message("Your profile emoji has been unequipped.", ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
