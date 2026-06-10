@@ -2630,6 +2630,7 @@ class ClaimView(discord.ui.View):
         last_claim_times[uid] = now
         button.disabled = True
         await add_card_to_inventory(uid, self.card["id"])
+        await notify_completed_sets(interaction, uid)
         claim_crate_chance = CLAIM_LOOT_CRATE_CHANCE
 
         if interaction.guild:
@@ -2708,12 +2709,11 @@ class TradeView(discord.ui.View):
 
     def completed_embed(self):
         embed = discord.Embed(
-            title="Trade Accepted",
+            title="<:Accept:1514062817815171175> Trade Accepted",
             description=(
-                f"{self.target.mention} accepted the trade.\n\n"
-                f"**{self.requester.display_name} gave:**\n"
+                f"**{self.requester.display_name}** traded:\n"
                 f"{trade_card_display(self.your_card)}\n\n"
-                f"**{self.target.display_name} gave:**\n"
+                f"**{self.target.display_name}** traded:\n"
                 f"{trade_card_display(self.their_card)}"
             ),
             color=discord.Color.green()
@@ -2721,17 +2721,20 @@ class TradeView(discord.ui.View):
         embed.set_footer(text="The cards have been exchanged successfully.")
         return embed
 
+    
     def declined_embed(self):
         embed = discord.Embed(
-            title="Trade Declined",
+            title="<:Decline:1514062765956927618> Trade Declined",
             description=(
-                f"{self.target.mention} declined {self.requester.mention}'s trade request.\n\n"
-                "No cards were exchanged."
+                f"**{self.target.display_name}** declined the trade request.\n\n"
+                f"**Offered:**\n{trade_card_display(self.your_card)}\n\n"
+                f"**Requested:**\n{trade_card_display(self.their_card)}"
             ),
             color=discord.Color.red()
         )
         return embed
 
+    
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.target.id:
             await interaction.response.send_message(
@@ -2776,6 +2779,9 @@ class TradeView(discord.ui.View):
 
         await add_daily_limit_usage(self.requester.id, "trade", count_add=1)
         await add_daily_limit_usage(self.target.id, "trade", count_add=1)
+
+        await notify_completed_sets(interaction, self.requester.id)
+        await notify_completed_sets(interaction, self.target.id)
 
         await interaction.edit_original_response(embed=self.completed_embed(), view=self)
 
@@ -4971,8 +4977,8 @@ async def notify_completed_sets(interaction, user_id):
                 await interaction.response.send_message(message, ephemeral=True)
         except Exception:
             try:
-                user = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
-                await user.send(message)
+                member = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
+                await member.send(message)
             except Exception:
                 pass
 
@@ -6487,7 +6493,7 @@ def create_member_help_embed(section="main"):
             value=(
                 "`/cardsets` - view available collections.\n"
                 "`/viewset` - view a collection and your progress.\n"
-                "`/checksets` - check completed collection rewards."
+                ""
             ),
             inline=False
         )
@@ -6895,23 +6901,27 @@ async def setcompletionemoji(interaction: discord.Interaction, emoji: str):
     await send_staff_log(interaction.guild, "Collection Completion Emoji Updated", f"**Emoji:** {emoji}\n**Updated by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
     await interaction.response.send_message(f"Collection completion emoji set to {emoji}.", ephemeral=True)
 
-@bot.tree.command(name="createset", description="Staff only: create a card collection set.")
+@bot.tree.command(name="createset", description="Admin only: create a card collection set.")
 @app_commands.default_permissions(administrator=True)
-async def createset(interaction: discord.Interaction, name: str, reward_text: str = "Open a ticket to claim your reward."):
+async def createset(interaction: discord.Interaction, name: str):
     if not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
 
-    if not await is_staff_member(interaction):
-        return await interaction.response.send_message("No permission.", ephemeral=True)
     async with db_pool.acquire() as conn:
         try:
             await conn.execute("""
                 INSERT INTO card_sets (guild_id, name, reward_text, is_active)
                 VALUES ($1, $2, $3, TRUE)
-            """, interaction.guild.id, name, reward_text)
+            """, interaction.guild.id, name, "Open a ticket to claim your reward.")
         except Exception:
             return await interaction.response.send_message("A set with that name already exists.", ephemeral=True)
-    await send_staff_log(interaction.guild, "Card Set Created", f"**Set:** {name}\n**Reward:** {reward_text}\n**Created by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
+
+    await send_staff_log(
+        interaction.guild,
+        "Card Set Created",
+        f"**Set:** {name}\n**Created by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
     await interaction.response.send_message(f"Created set **{name}**.", ephemeral=True)
 
 @bot.tree.command(name="addcardtoset", description="Staff only: add a card to a collection set.")
@@ -6969,12 +6979,8 @@ async def viewset(interaction: discord.Interaction, set_name: str):
         card_text = "No cards have been added to this set yet."
     else:
         lines = []
-
         for card in cards:
-            owned = await user_owns_card(interaction.user.id, card["id"])
-            marker = "<:Heart:1514038992754241536>" if owned else "♡"
-            lines.append(f"{marker} {card['name']}")
-
+            lines.append(f"{BULLET_EMOJI} {card['name']}")
         card_text = "\n".join(lines)
 
     embed = discord.Embed(
@@ -6982,7 +6988,6 @@ async def viewset(interaction: discord.Interaction, set_name: str):
         description=f"**Progress:** {owned_count}/{total_count}\n\n**Cards**\n{card_text}",
         color=discord.Color.from_str("#9e659d")
     )
-
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="cardsets", description="View available card collection sets.")
@@ -6998,12 +7003,6 @@ async def cardsets(interaction: discord.Interaction):
         lines.append(f"{status} **{card_set['name']}** — {owned_count}/{total_count}")
     embed = discord.Embed(title="Card Collections", description="\n".join(lines), color=discord.Color.from_str("#9e659d"))
     await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="checksets", description="Check if you completed any collection rewards.")
-async def checksets(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    await notify_completed_sets(interaction, interaction.user.id)
-    await interaction.followup.send("Collection check complete.", ephemeral=True)
 
 @bot.tree.command(name="unequiptitle", description="Remove your currently equipped title.")
 async def unequiptitle(interaction: discord.Interaction):
@@ -7141,7 +7140,7 @@ async def create_settings_embed(guild_id, section="status"):
     return embed
 
 class SettingsSectionSelect(discord.ui.Select):
-    def __init__(self, current_section="status"):
+    def __init__(self):
         options = [
             discord.SelectOption(label="Status", value="status"),
             discord.SelectOption(label="Drops", value="drops"),
@@ -7151,7 +7150,6 @@ class SettingsSectionSelect(discord.ui.Select):
             discord.SelectOption(label="Events", value="events"),
             discord.SelectOption(label="Collections", value="collections"),
         ]
-
         super().__init__(
             placeholder="Choose a settings section...",
             min_values=1,
@@ -7161,7 +7159,6 @@ class SettingsSectionSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         section = self.values[0]
-
         await interaction.response.edit_message(
             embed=await create_settings_embed(interaction.guild.id, section),
             view=SettingsPanelView(section)
@@ -7174,7 +7171,6 @@ class SettingsFieldSelect(discord.ui.Select):
             discord.SelectOption(label=meta["label"], value=key)
             for key, meta in SETTING_OPTIONS.get(section, {}).get("items", {}).items()
         ]
-
         super().__init__(
             placeholder="Choose what to edit...",
             min_values=1,
@@ -7207,12 +7203,10 @@ class SettingsValueSelect(discord.ui.Select):
         self.section = section
         self.field = field
         meta = SETTING_OPTIONS[section]["items"][field]
-
         options = [
             discord.SelectOption(label=f"{value}{meta['suffix']}", value=str(value))
             for value in meta["values"]
         ]
-
         super().__init__(
             placeholder=f"Choose {meta['label']} value...",
             min_values=1,
@@ -7226,40 +7220,39 @@ class SettingsValueSelect(discord.ui.Select):
 
         value = int(self.values[0])
         meta = SETTING_OPTIONS[self.section]["items"][self.field]
-
         await apply_simple_setting(interaction.guild.id, self.field, meta["kind"], value)
-
         await send_staff_log(
             interaction.guild,
             "Setting Updated",
             f"**Setting:** {meta['label']}\n**New value:** {value}{meta['suffix']}\n**Updated by:** {interaction.user.mention}",
             discord.Color.from_str("#9e659d")
         )
-
         await interaction.response.edit_message(
             embed=await create_settings_embed(interaction.guild.id, self.section),
             view=SettingsPanelView(self.section)
         )
 
 class SettingsBackButton(discord.ui.Button):
-    def __init__(self, section):
+    def __init__(self, target_section):
         super().__init__(label="Back", style=discord.ButtonStyle.secondary)
-        self.section = section
+        self.target_section = target_section
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.edit_message(
-            embed=await create_settings_embed(interaction.guild.id, self.section),
-            view=SettingsPanelView(self.section)
+            embed=await create_settings_embed(interaction.guild.id, self.target_section),
+            view=SettingsPanelView(self.target_section)
         )
 
 class SettingsPanelView(discord.ui.View):
     def __init__(self, section="status"):
         super().__init__(timeout=300)
         self.section = section
-        self.add_item(SettingsSectionSelect(section))
-
-        if section in SETTING_OPTIONS:
-            self.add_item(SettingsFieldSelect(section))
+        if section == "status":
+            self.add_item(SettingsSectionSelect())
+        else:
+            self.add_item(SettingsBackButton("status"))
+            if section in SETTING_OPTIONS:
+                self.add_item(SettingsFieldSelect(section))
 
 class SettingsEditValueView(discord.ui.View):
     def __init__(self, section, field):
