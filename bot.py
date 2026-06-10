@@ -3790,116 +3790,138 @@ async def create_staff_settings_embed(guild_id):
 
     return embed
 
-async def build_bot_status_lines(guild_id):
-    try:
-        drop_settings = await get_drop_settings(guild_id)
-    except Exception:
-        drop_settings = {}
+async def get_status_snapshot(guild_id):
+    async def safe_call(coro, default):
+        try:
+            return await coro
+        except Exception:
+            return default
 
-    try:
-        rarity_settings = await get_rarity_settings(guild_id)
-    except Exception:
-        rarity_settings = {}
+    drop_settings = await safe_call(get_drop_settings(guild_id), {})
+    rarity_settings = await safe_call(get_rarity_settings(guild_id), {})
+    economy_settings = await safe_call(get_economy_settings(guild_id), {})
+    crate_settings = await safe_call(get_crate_settings(guild_id), {})
+    event_settings = await safe_call(get_event_settings(guild_id), {})
+    collection_settings = await safe_call(get_collection_settings(guild_id), {})
 
-    try:
-        economy_settings = await get_economy_settings(guild_id)
-    except Exception:
-        economy_settings = {}
+    counts = {
+        "cards_total": 0,
+        "cards_active": 0,
+        "event_cards": 0,
+        "sets_active": 0,
+        "titles_active": 0,
+        "profile_emojis_active": 0,
+        "drop_channels": 0,
+    }
 
-    try:
-        crate_settings = await get_crate_settings(guild_id)
-    except Exception:
-        crate_settings = {}
-
-    try:
-        event_settings = await get_event_settings(guild_id)
-    except Exception:
-        event_settings = {}
-
-    try:
-        collection_settings = await get_collection_settings(guild_id)
-    except Exception:
-        collection_settings = {}
-
-    guild = bot.get_guild(guild_id)
-
-    def channel_display(channel_id):
-        if not channel_id:
-            return "Not set"
-        return f"<#{channel_id}>"
-
-    def role_display(role_id):
-        if not role_id:
-            return "Not set"
-        return f"<@&{role_id}>"
-
-    staff_role = (
-        drop_settings.get("staff_role_id")
-        or drop_settings.get("staff_role")
-        or drop_settings.get("staff_roleid")
-    )
-
-    mod_role = (
-        drop_settings.get("mod_role_id")
-        or drop_settings.get("moderator_role_id")
-        or drop_settings.get("mod_role")
-    )
-
-    admin_role = (
-        drop_settings.get("admin_role_id")
-        or drop_settings.get("admin_role")
-    )
-
-    drop_channels_text = "Not set"
+    drop_channels = []
 
     try:
         async with db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT channel_id FROM drop_channels WHERE guild_id=$1 ORDER BY channel_id",
-                guild_id
-            )
+            try:
+                counts["cards_total"] = await conn.fetchval("SELECT COUNT(*) FROM cards") or 0
+            except Exception:
+                pass
 
-        if rows:
-            drop_channels_text = ", ".join(f"<#{row['channel_id']}>" for row in rows[:10])
-            if len(rows) > 10:
-                drop_channels_text += f" +{len(rows) - 10} more"
+            try:
+                counts["cards_active"] = await conn.fetchval("SELECT COUNT(*) FROM cards WHERE is_active=TRUE") or 0
+            except Exception:
+                pass
+
+            try:
+                counts["event_cards"] = await conn.fetchval("SELECT COUNT(*) FROM cards WHERE is_event_card=TRUE") or 0
+            except Exception:
+                pass
+
+            try:
+                counts["sets_active"] = await conn.fetchval("SELECT COUNT(*) FROM card_sets WHERE guild_id=$1 AND is_active=TRUE", guild_id) or 0
+            except Exception:
+                pass
+
+            try:
+                counts["titles_active"] = await conn.fetchval("SELECT COUNT(*) FROM shop_titles WHERE is_active=TRUE") or 0
+            except Exception:
+                pass
+
+            try:
+                counts["profile_emojis_active"] = await conn.fetchval("SELECT COUNT(*) FROM profile_emojis WHERE is_active=TRUE") or 0
+            except Exception:
+                pass
+
+            try:
+                rows = await conn.fetch("SELECT channel_id FROM drop_channels WHERE guild_id=$1 ORDER BY channel_id", guild_id)
+                drop_channels = [row["channel_id"] for row in rows]
+                counts["drop_channels"] = len(drop_channels)
+            except Exception:
+                pass
     except Exception:
         pass
 
+    return {
+        "drop": drop_settings,
+        "rarity": rarity_settings,
+        "economy": economy_settings,
+        "crate": crate_settings,
+        "event": event_settings,
+        "collection": collection_settings,
+        "counts": counts,
+        "drop_channels": drop_channels,
+    }
+
+def format_status_channel(channel_id):
+    if not channel_id:
+        return "Not set"
+    return f"<#{channel_id}>"
+
+def format_status_role(role_id):
+    if not role_id:
+        return "Not set"
+    return f"<@&{role_id}>"
+
+async def build_bot_status_lines(guild_id):
+    status = await get_status_snapshot(guild_id)
+    drop = status["drop"]
+    rarity = status["rarity"]
+    economy = status["economy"]
+    crate = status["crate"]
+    event = status["event"]
+    collection = status["collection"]
+    counts = status["counts"]
+
+    staff_role = drop.get("staff_role_id") or drop.get("staff_role") or drop.get("staff_roleid")
+    mod_role = drop.get("mod_role_id") or drop.get("moderator_role_id") or drop.get("mod_role")
+    admin_role = drop.get("admin_role_id") or drop.get("admin_role")
+
     rarity_total = (
-        int(rarity_settings.get("common_chance", 0))
-        + int(rarity_settings.get("rare_chance", 0))
-        + int(rarity_settings.get("epic_chance", 0))
-        + int(rarity_settings.get("legendary_chance", 0))
+        int(rarity.get("common_chance", 0))
+        + int(rarity.get("rare_chance", 0))
+        + int(rarity.get("epic_chance", 0))
+        + int(rarity.get("legendary_chance", 0))
     )
 
     return (
-        f"**Bot:** Online\n"
-        f"**Staff Role:** {role_display(staff_role)}\n"
-        f"**Mod Role:** {role_display(mod_role)}\n"
-        f"**Admin Role:** {role_display(admin_role)}\n"
-        f"**Staff Log:** {channel_display(drop_settings.get('staff_log_channel_id'))}\n"
-        f"**Ticket Channel:** {channel_display(collection_settings.get('ticket_channel_id'))}\n"
-        f"**Drop Channels:** {drop_channels_text}\n\n"
-        f"**Auto Drops:** Every {drop_settings.get('auto_drop_minutes', 'N/A')} minutes\n"
-        f"**Drop Chance:** {drop_settings.get('auto_drop_chance', 'N/A')}%\n"
-        f"**Claim Cooldown:** {drop_settings.get('claim_cooldown_seconds', 'N/A')} seconds\n\n"
-        f"**Rarity Total:** {rarity_total}/100\n"
-        f"**Common/Rare/Epic/Legendary:** "
-        f"{rarity_settings.get('common_chance', 'N/A')}/"
-        f"{rarity_settings.get('rare_chance', 'N/A')}/"
-        f"{rarity_settings.get('epic_chance', 'N/A')}/"
-        f"{rarity_settings.get('legendary_chance', 'N/A')}\n\n"
-        f"**Daily:** {economy_settings.get('daily_min', 'N/A')} - {economy_settings.get('daily_max', 'N/A')} Sancs\n"
-        f"**Weekly:** {economy_settings.get('weekly_min', 'N/A')} - {economy_settings.get('weekly_max', 'N/A')} Sancs\n"
-        f"**Regular Crate:** {crate_settings.get('regular_crate_min', 'N/A')} - {crate_settings.get('regular_crate_max', 'N/A')} Sancs\n"
-        f"**Legendary Crate:** {crate_settings.get('legendary_crate_min', 'N/A')} - {crate_settings.get('legendary_crate_max', 'N/A')} Sancs\n\n"
-        f"**Event:** {event_settings.get('event_name', 'No Event')}\n"
-        f"**Theme:** {event_settings.get('event_theme', 'None')}\n"
-        f"**Launched:** {format_on_off(event_settings.get('event_launched', False))}\n"
-        f"**Event Drops:** {format_on_off(event_settings.get('event_only_drops', False))}\n"
-        f"**Event Boosts:** {format_on_off(event_settings.get('event_boosts_enabled', False))}\n"
-        f"**Event Card Chance:** {event_settings.get('event_card_chance', 10)}%"
+        f"**Bot:** Online\\n"
+        f"**Admin Role:** {format_status_role(admin_role)}\\n"
+        f"**Mod Role:** {format_status_role(mod_role)}\\n"
+        f"**Staff Role:** {format_status_role(staff_role)}\\n"
+        f"**Staff Log:** {format_status_channel(drop.get('staff_log_channel_id'))}\\n"
+        f"**Ticket Channel:** {format_status_channel(collection.get('ticket_channel_id'))}\\n"
+        f"**Drop Channels:** {counts['drop_channels']}\\n"
+        f"**Cards:** {counts['cards_active']} active / {counts['cards_total']} total\\n"
+        f"**Event Cards:** {counts['event_cards']}\\n"
+        f"**Active Sets:** {counts['sets_active']}\\n"
+        f"**Shop Titles:** {counts['titles_active']}\\n"
+        f"**Profile Emojis:** {counts['profile_emojis_active']}\\n"
+        f"**Auto Drops:** {drop.get('auto_drop_minutes', 'N/A')}m at {drop.get('auto_drop_chance', 'N/A')}%\\n"
+        f"**Claim Cooldown:** {drop.get('claim_cooldown_seconds', 'N/A')}s\\n"
+        f"**Rarity Total:** {rarity_total}/100\\n"
+        f"**Economy:** Daily {economy.get('daily_min', 'N/A')}-{economy.get('daily_max', 'N/A')} | Weekly {economy.get('weekly_min', 'N/A')}-{economy.get('weekly_max', 'N/A')}\\n"
+        f"**Crates:** Regular {crate.get('regular_crate_min', 'N/A')}-{crate.get('regular_crate_max', 'N/A')} | Legendary {crate.get('legendary_crate_min', 'N/A')}-{crate.get('legendary_crate_max', 'N/A')}\\n"
+        f"**Event:** {event.get('event_name', 'No Event')} — {event.get('event_theme', 'None')}\\n"
+        f"**Launched:** {format_on_off(event.get('event_launched', False))}\\n"
+        f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\\n"
+        f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\\n"
+        f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
     )
 
 async def create_settings_embed(guild_id, section="status"):
@@ -3921,27 +3943,102 @@ async def create_settings_embed(guild_id, section="status"):
 
     if section == "status":
         embed.description = "Use the dropdown to view each section."
+        status = await get_status_snapshot(guild_id)
+        drop = status["drop"]
+        rarity = status["rarity"]
+        economy = status["economy"]
+        crate = status["crate"]
+        event = status["event"]
+        collection = status["collection"]
+        counts = status["counts"]
+        drop_channels = status["drop_channels"]
+
+        staff_role = drop.get("staff_role_id") or drop.get("staff_role") or drop.get("staff_roleid")
+        mod_role = drop.get("mod_role_id") or drop.get("moderator_role_id") or drop.get("mod_role")
+        admin_role = drop.get("admin_role_id") or drop.get("admin_role")
+
+        rarity_total = (
+            int(rarity.get("common_chance", 0))
+            + int(rarity.get("rare_chance", 0))
+            + int(rarity.get("epic_chance", 0))
+            + int(rarity.get("legendary_chance", 0))
+        )
+
+        if drop_channels:
+            drop_channel_text = ", ".join(f"<#{channel_id}>" for channel_id in drop_channels[:8])
+            if len(drop_channels) > 8:
+                drop_channel_text += f" +{len(drop_channels) - 8} more"
+        else:
+            drop_channel_text = "Not set"
+
         embed.add_field(
-            name="Bot Status",
-            value=await build_bot_status_lines(guild_id),
+            name="Roles",
+            value=(
+                f"**Admin:** {format_status_role(admin_role)}\n"
+                f"**Mod:** {format_status_role(mod_role)}\n"
+                f"**Staff:** {format_status_role(staff_role)}"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Channels",
+            value=(
+                f"**Staff Log:** {format_status_channel(drop.get('staff_log_channel_id'))}\n"
+                f"**Ticket:** {format_status_channel(collection.get('ticket_channel_id'))}\n"
+                f"**Drops:** {drop_channel_text}"
+            ),
             inline=False
         )
         embed.add_field(
             name="Drops",
             value=(
-                f"**Interval:** {snapshot['drop']['auto_drop_minutes']} minutes\n"
-                f"**Chance:** {snapshot['drop']['auto_drop_chance']}%\n"
-                f"**Cooldown:** {snapshot['drop']['claim_cooldown_seconds']} seconds"
+                f"**Auto Drops:** Every {drop.get('auto_drop_minutes', 'N/A')} minutes\n"
+                f"**Drop Chance:** {drop.get('auto_drop_chance', 'N/A')}%\n"
+                f"**Claim Cooldown:** {drop.get('claim_cooldown_seconds', 'N/A')} seconds"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Cards & Shop",
+            value=(
+                f"**Cards:** {counts['cards_active']} active / {counts['cards_total']} total\n"
+                f"**Event Cards:** {counts['event_cards']}\n"
+                f"**Active Sets:** {counts['sets_active']}\n"
+                f"**Titles:** {counts['titles_active']}\n"
+                f"**Profile Emojis:** {counts['profile_emojis_active']}"
             ),
             inline=False
         )
         embed.add_field(
             name="Rarity",
             value=(
-                f"**Common:** {snapshot['rarity']['common_chance']}\n"
-                f"**Rare:** {snapshot['rarity']['rare_chance']}\n"
-                f"**Epic:** {snapshot['rarity']['epic_chance']}\n"
-                f"**Legendary:** {snapshot['rarity']['legendary_chance']}"
+                f"**Total:** {rarity_total}/100\n"
+                f"**Common:** {rarity.get('common_chance', 'N/A')}\n"
+                f"**Rare:** {rarity.get('rare_chance', 'N/A')}\n"
+                f"**Epic:** {rarity.get('epic_chance', 'N/A')}\n"
+                f"**Legendary:** {rarity.get('legendary_chance', 'N/A')}"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Economy & Crates",
+            value=(
+                f"**Daily:** {economy.get('daily_min', 'N/A')} - {economy.get('daily_max', 'N/A')} Sancs\n"
+                f"**Weekly:** {economy.get('weekly_min', 'N/A')} - {economy.get('weekly_max', 'N/A')} Sancs\n"
+                f"**Regular Crate:** {crate.get('regular_crate_min', 'N/A')} - {crate.get('regular_crate_max', 'N/A')} Sancs\n"
+                f"**Legendary Crate:** {crate.get('legendary_crate_min', 'N/A')} - {crate.get('legendary_crate_max', 'N/A')} Sancs"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Event",
+            value=(
+                f"**Name:** {event.get('event_name', 'No Event')}\n"
+                f"**Theme:** {event.get('event_theme', 'None')}\n"
+                f"**Launched:** {format_on_off(event.get('event_launched', False))}\n"
+                f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\n"
+                f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\n"
+                f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
             ),
             inline=False
         )
