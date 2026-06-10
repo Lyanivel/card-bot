@@ -179,7 +179,7 @@ SNIPE_FOUND_MESSAGES = [
 ]
 
 EVENT_CARD_LOCKED_MESSAGE = "This event card belongs to a chosen few."
-COLLECTION_COMPLETE_TEXT_TEMPLATE = "{emoji} ᴄᴏʟʟᴇᴄᴛɪᴏɴ ᴄᴏᴍᴘʟᴇᴛᴇ! ʏᴏᴜ ᴄᴏᴍᴘʟᴇᴛᴇᴅ sᴇᴛ {set_name}. ᴘʟᴇᴀsᴇ ᴏᴘᴇɴ ᴀ ᴛɪᴄᴋᴇᴛ ᴛᴏ ᴄʟᴀɪᴍ ʏᴏᴜʀ ʀᴇᴡᴀʀᴅ! {ticket_channel}"
+COLLECTION_COMPLETE_TEXT_TEMPLATE = "{emoji} ᴄᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴs {user_mention}, ᴄᴏʟʟᴇᴄᴛɪᴏɴ ᴄᴏᴍᴘʟᴇᴛᴇ! ʏᴏᴜ ᴄᴏᴍᴘʟᴇᴛᴇᴅ sᴇᴛ {set_name}. ᴘʟᴇᴀsᴇ ᴏᴘᴇɴ ᴀ ᴛɪᴄᴋᴇᴛ ᴛᴏ ᴄʟᴀɪᴍ ʏᴏᴜʀ ʀᴇᴡᴀʀᴅ! {ticket_channel}"
 OWNER_PROTECTION_MESSAGES = [
     "{target} SHOULD have been muted. Discord chose peace instead of violence.",
     "{target} was eliminated spiritually because Discord refused the paperwork.",
@@ -1184,6 +1184,35 @@ async def reset_event_settings_db(guild_id):
                 event_only_drops=FALSE,
                 event_boosts_enabled=FALSE
         """, guild_id)
+
+async def has_role_id(member, role_id):
+    if not member or not role_id:
+        return False
+    return any(role.id == int(role_id) for role in getattr(member, "roles", []))
+
+async def is_bot_admin_member(member):
+    if not member:
+        return False
+
+    if getattr(member.guild_permissions, "administrator", False):
+        return True
+
+    admin_role_id = await get_admin_role(member.guild.id)
+    return await has_role_id(member, admin_role_id)
+
+async def is_bot_mod_member(member):
+    if await is_bot_admin_member(member):
+        return True
+
+    mod_role_id = await get_mod_role(member.guild.id)
+    return await has_role_id(member, mod_role_id)
+
+async def is_bot_staff_member(member):
+    if await is_bot_mod_member(member):
+        return True
+
+    staff_role_id = await get_staff_role(member.guild.id)
+    return await has_role_id(member, staff_role_id)
 
 async def is_staff_member(interaction: discord.Interaction):
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
@@ -3606,7 +3635,7 @@ class EconomySettingsSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not await is_bot_admin_member(interaction.user):
             return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
 
         choice = self.values[0]
@@ -3743,7 +3772,7 @@ class CrateSettingsSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not await is_bot_admin_member(interaction.user):
             return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
 
         choice = self.values[0]
@@ -4296,7 +4325,7 @@ class DropSettingsSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not await is_bot_admin_member(interaction.user):
             return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
 
         choice = self.values[0]
@@ -4400,7 +4429,7 @@ class SettingsCategorySelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not await is_bot_admin_member(interaction.user):
             return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
 
         choice = self.values[0]
@@ -4496,7 +4525,7 @@ class SnipeSettingsSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not await is_bot_admin_member(interaction.user):
             return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
 
         choice = self.values[0]
@@ -5210,6 +5239,15 @@ async def notify_completed_sets(interaction, user_id):
     ticket_channel = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else ""
     emoji = settings.get("completion_emoji") or "🎉"
 
+    member = interaction.guild.get_member(user_id)
+    if not member:
+        try:
+            member = await interaction.guild.fetch_member(user_id)
+        except Exception:
+            member = None
+
+    user_mention = member.mention if member else f"<@{user_id}>"
+
     for card_set in sets:
         complete, owned_count, total_count = await user_owns_all_cards_in_set(user_id, card_set["id"])
 
@@ -5222,22 +5260,27 @@ async def notify_completed_sets(interaction, user_id):
             continue
 
         message = COLLECTION_COMPLETE_TEXT_TEMPLATE.format(
+            user_mention=user_mention,
             emoji=emoji,
             set_name=card_set["name"],
             ticket_channel=ticket_channel
         ).strip()
 
+        # Public message so the user is actually notified/pinged.
         try:
-            if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
+            await interaction.channel.send(message)
         except Exception:
             try:
-                member = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
-                await member.send(message)
+                if interaction.response.is_done():
+                    await interaction.followup.send(message, ephemeral=False)
+                else:
+                    await interaction.response.send_message(message, ephemeral=False)
             except Exception:
-                pass
+                try:
+                    if member:
+                        await member.send(message)
+                except Exception:
+                    pass
 
 async def event_card_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
@@ -5514,47 +5557,6 @@ async def weekly(interaction: discord.Interaction):
     embed.set_thumbnail(url=LEGENDARY_CRATE_IMAGE_URL)
 
     await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="givecurrency", description="Give some of your currency to another user.")
-@app_commands.describe(
-    user="User to give currency to",
-    amount="Amount to give"
-)
-async def givecurrency(interaction: discord.Interaction, user: discord.Member, amount: int):
-    if user.bot:
-        return await interaction.response.send_message("You cannot give currency to a bot.", ephemeral=True)
-    if user.id == interaction.user.id:
-        return await interaction.response.send_message("You cannot give currency to yourself.", ephemeral=True)
-    if amount <= 0:
-        return await interaction.response.send_message("Amount must be greater than 0.", ephemeral=True)
-
-    if amount > MAX_GIVECURRENCY_PER_TRANSFER:
-        return await interaction.response.send_message(
-            f"You can only send up to **{format_coins(MAX_GIVECURRENCY_PER_TRANSFER)}** at once.",
-            ephemeral=True
-        )
-
-    daily_usage = await get_daily_limit_row(interaction.user.id, "givecurrency")
-
-    if daily_usage["amount_value"] + amount > MAX_GIVECURRENCY_PER_DAY:
-        remaining = max(0, MAX_GIVECURRENCY_PER_DAY - daily_usage["amount_value"])
-        return await interaction.response.send_message(
-            f"You can only send **{format_coins(MAX_GIVECURRENCY_PER_DAY)}** per day. "
-            f"You have **{format_coins(remaining)}** left today.",
-            ephemeral=True
-        )
-
-    success = await transfer_balance(interaction.user.id, user.id, amount)
-    if not success:
-        return await interaction.response.send_message(
-            "You do not have enough currency.",
-            ephemeral=True
-        )
-    await add_daily_limit_usage(interaction.user.id, "givecurrency", amount_add=amount)
-
-    await interaction.response.send_message(
-        f"{interaction.user.mention} gave {user.mention} **{format_coins(amount)}**."
-    )
 
 @bot.tree.command(name="addbal", description="Staff only: add currency to a user's balance.")
 @app_commands.default_permissions(manage_messages=True)
@@ -6843,7 +6845,7 @@ def create_staff_help_embed(section="staff"):
                 "`/dropcard` - manually drop a card.\n"
                 "`/givecard` - give a card to a user.\n"
                 "`/resetuser` - reset a user with confirmation.\n"
-                "`/addcurrency` - give Sancs to a user.\n"
+                "`/addbal` - add Sancs to a user.\n"
                 "`/removecurrency` - remove Sancs from a user."
             ),
             inline=False
@@ -7440,7 +7442,7 @@ class SettingsValueSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.administrator:
+        if not await is_bot_admin_member(interaction.user):
             return await interaction.response.send_message("Only administrators can edit settings.", ephemeral=True)
 
         value = int(self.values[0])
@@ -7486,10 +7488,10 @@ class SettingsEditValueView(discord.ui.View):
         self.add_item(SettingsValueSelect(section, field))
 
 @bot.tree.command(name="settings", description="Admin only: view and edit bot settings.")
-@app_commands.default_permissions(administrator=True)
+@app_commands.default_permissions(manage_messages=True)
 async def settings(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
+    if not await is_bot_staff_member(interaction.user):
+        return await interaction.response.send_message("Only staff can view settings.", ephemeral=True)
 
     await interaction.response.send_message(embed=await create_settings_embed(interaction.guild.id, "status"), view=SettingsPanelView("status"), ephemeral=True)
 
@@ -7613,12 +7615,12 @@ async def burncard(interaction: discord.Interaction, card: str):
     )
 
 @bot.tree.command(name="givecard", description="Admin only: give a card directly to a user.")
-@app_commands.default_permissions(administrator=True)
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.describe(user="User receiving the card", card="Card to give")
 @app_commands.autocomplete(card=active_card_autocomplete)
 async def givecard(interaction: discord.Interaction, user: discord.Member, card: str):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+    if not await is_bot_staff_member(interaction.user):
+        return await interaction.response.send_message("Only staff can use this command.", ephemeral=True)
 
     card_row = await get_card_by_ref(card)
 
