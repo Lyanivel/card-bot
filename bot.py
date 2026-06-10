@@ -505,6 +505,14 @@ async def setup_database():
             ALTER TABLE server_settings
             ADD COLUMN IF NOT EXISTS staff_log_channel_id BIGINT;
         """)
+        await conn.execute("""
+            ALTER TABLE server_settings
+            ADD COLUMN IF NOT EXISTS admin_role_id BIGINT;
+        """)
+        await conn.execute("""
+            ALTER TABLE server_settings
+            ADD COLUMN IF NOT EXISTS mod_role_id BIGINT;
+        """)
 
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS drop_channels (
@@ -669,6 +677,38 @@ async def set_staff_role_db(guild_id, role_id):
             VALUES ($1, $2)
             ON CONFLICT (guild_id)
             DO UPDATE SET staff_role_id=$2
+        """, guild_id, role_id)
+
+async def get_admin_role(guild_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT admin_role_id FROM server_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+async def set_admin_role_db(guild_id, role_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO server_settings (guild_id, admin_role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET admin_role_id=$2
+        """, guild_id, role_id)
+
+async def get_mod_role(guild_id):
+    async with db_pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT mod_role_id FROM server_settings WHERE guild_id=$1",
+            guild_id
+        )
+
+async def set_mod_role_db(guild_id, role_id):
+    async with db_pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO server_settings (guild_id, mod_role_id)
+            VALUES ($1, $2)
+            ON CONFLICT (guild_id)
+            DO UPDATE SET mod_role_id=$2
         """, guild_id, role_id)
 
 async def get_staff_log_channel(guild_id):
@@ -6491,13 +6531,11 @@ async def equiptitle(interaction: discord.Interaction, title: str):
 
 @bot.tree.command(name="setstaffrole", description="Admin only: set the staff role for this server.")
 @app_commands.default_permissions(administrator=True)
-@app_commands.describe(role="Role allowed to use staff bot commands")
+@app_commands.describe(role="General staff role")
 async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
     if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message(
-            "Only server administrators can set the staff role.",
-            ephemeral=True
-        )
+        return await interaction.response.send_message("Only server administrators can set staff roles.", ephemeral=True)
+
     await set_staff_role_db(interaction.guild.id, role.id)
 
     await send_staff_log(
@@ -6507,9 +6545,7 @@ async def setstaffrole(interaction: discord.Interaction, role: discord.Role):
         discord.Color.from_str("#9e659d")
     )
 
-    await interaction.response.send_message(
-        f"Staff role set to {role.mention}."
-    )
+    await interaction.response.send_message(f"Staff role set to {role.mention}.", ephemeral=True)
 
 @bot.tree.command(name="addropchannel", description="Staff only: add a channel for automatic card drops.")
 @app_commands.default_permissions(manage_messages=True)
@@ -6815,7 +6851,7 @@ def create_staff_help_embed(section="staff"):
         embed.add_field(
             name="Setup",
             value=(
-                "`/setstaffrole` - set the staff role.\n"
+                "`/setadminrole` - set the admin role.\n`/setmodrole` - set the mod role.\n`/setstaffrole` - set the staff role.\n"
                 "`/setstafflog` - set the staff log channel.\n"
                 "`/adddropchannel` - add a drop channel.\n"
                 "`/removedropchannel` - remove a drop channel.\n"
@@ -7268,87 +7304,24 @@ async def create_settings_embed(guild_id, section="status"):
     if section == "status":
         embed.description = "Use the dropdown to view each section."
 
-        # Pull the full live dashboard directly here so the active settings command shows everything.
-        try:
-            drop = await get_drop_settings(guild_id)
-        except Exception:
-            drop = {}
+        admin_role_id = await get_admin_role(guild_id)
+        mod_role_id = await get_mod_role(guild_id)
+        staff_role_id = await get_staff_role(guild_id)
+        staff_log_channel_id = await get_staff_log_channel(guild_id)
 
-        try:
-            rarity = await get_rarity_settings(guild_id)
-        except Exception:
-            rarity = {}
-
-        try:
-            economy = await get_economy_settings(guild_id)
-        except Exception:
-            economy = {}
-
-        try:
-            crate = await get_crate_settings(guild_id)
-        except Exception:
-            crate = {}
-
-        try:
-            event = await get_event_settings(guild_id)
-        except Exception:
-            event = {}
-
-        try:
-            collection = await get_collection_settings(guild_id)
-        except Exception:
-            collection = {}
-
-        counts = {
-            "cards_total": 0,
-            "cards_active": 0,
-            "event_cards": 0,
-            "sets_active": 0,
-            "titles_active": 0,
-            "profile_emojis_active": 0,
-            "drop_channels": 0,
-        }
-        drop_channels = []
+        collection = snapshot["collection"]
+        drop = snapshot["drop"]
+        event = snapshot["event"]
 
         try:
             async with db_pool.acquire() as conn:
-                for key, query in [
-                    ("cards_total", "SELECT COUNT(*) FROM cards"),
-                    ("cards_active", "SELECT COUNT(*) FROM cards WHERE is_active=TRUE"),
-                    ("event_cards", "SELECT COUNT(*) FROM cards WHERE is_event_card=TRUE"),
-                    ("sets_active", "SELECT COUNT(*) FROM card_sets WHERE guild_id=$1 AND is_active=TRUE"),
-                    ("titles_active", "SELECT COUNT(*) FROM shop_titles WHERE is_active=TRUE"),
-                    ("profile_emojis_active", "SELECT COUNT(*) FROM profile_emojis WHERE is_active=TRUE"),
-                ]:
-                    try:
-                        if "$1" in query:
-                            counts[key] = await conn.fetchval(query, guild_id) or 0
-                        else:
-                            counts[key] = await conn.fetchval(query) or 0
-                    except Exception:
-                        counts[key] = 0
-
-                try:
-                    rows = await conn.fetch(
-                        "SELECT channel_id FROM drop_channels WHERE guild_id=$1 ORDER BY channel_id",
-                        guild_id
-                    )
-                    drop_channels = [row["channel_id"] for row in rows]
-                    counts["drop_channels"] = len(drop_channels)
-                except Exception:
-                    pass
+                rows = await conn.fetch(
+                    "SELECT channel_id FROM drop_channels WHERE guild_id=$1 ORDER BY channel_id",
+                    guild_id
+                )
+                drop_channels = [row["channel_id"] for row in rows]
         except Exception:
-            pass
-
-        def channel_text(channel_id):
-            return f"<#{channel_id}>" if channel_id else "Not set"
-
-        def role_text(role_id):
-            return f"<@&{role_id}>" if role_id else "Not set"
-
-        staff_role = drop.get("staff_role_id") or drop.get("staff_role") or drop.get("staff_roleid")
-        mod_role = drop.get("mod_role_id") or drop.get("moderator_role_id") or drop.get("mod_role")
-        admin_role = drop.get("admin_role_id") or drop.get("admin_role")
+            drop_channels = []
 
         if drop_channels:
             drop_channel_text = ", ".join(f"<#{channel_id}>" for channel_id in drop_channels[:8])
@@ -7357,19 +7330,15 @@ async def create_settings_embed(guild_id, section="status"):
         else:
             drop_channel_text = "Not set"
 
-        rarity_total = (
-            int(rarity.get("common_chance", 0))
-            + int(rarity.get("rare_chance", 0))
-            + int(rarity.get("epic_chance", 0))
-            + int(rarity.get("legendary_chance", 0))
-        )
+        ticket_channel_text = f"<#{collection['ticket_channel_id']}>" if collection.get("ticket_channel_id") else "Not set"
+        staff_log_text = f"<#{staff_log_channel_id}>" if staff_log_channel_id else "Not set"
 
         embed.add_field(
             name="Roles",
             value=(
-                f"**Admin:** {role_text(admin_role)}\n"
-                f"**Mod:** {role_text(mod_role)}\n"
-                f"**Staff:** {role_text(staff_role)}"
+                f"**Admin:** {f'<@&{admin_role_id}>' if admin_role_id else 'Not set'}\n"
+                f"**Mod:** {f'<@&{mod_role_id}>' if mod_role_id else 'Not set'}\n"
+                f"**Staff:** {f'<@&{staff_role_id}>' if staff_role_id else 'Not set'}"
             ),
             inline=False
         )
@@ -7377,67 +7346,20 @@ async def create_settings_embed(guild_id, section="status"):
         embed.add_field(
             name="Channels",
             value=(
-                f"**Staff Log:** {channel_text(drop.get('staff_log_channel_id'))}\n"
-                f"**Ticket:** {channel_text(collection.get('ticket_channel_id'))}\n"
-                f"**Drops:** {drop_channel_text}"
+                f"**Staff Log:** {staff_log_text}\n"
+                f"**Ticket:** {ticket_channel_text}\n"
+                f"**Drop Channels:** {drop_channel_text}"
             ),
             inline=False
         )
 
         embed.add_field(
-            name="Drops",
+            name="Toggles",
             value=(
-                f"**Auto Drops:** Every {drop.get('auto_drop_minutes', 'N/A')} minutes\n"
-                f"**Drop Chance:** {drop.get('auto_drop_chance', 'N/A')}%\n"
-                f"**Claim Cooldown:** {drop.get('claim_cooldown_seconds', 'N/A')} seconds"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="Cards & Shop",
-            value=(
-                f"**Cards:** {counts['cards_active']} active / {counts['cards_total']} total\n"
-                f"**Event Cards:** {counts['event_cards']}\n"
-                f"**Active Sets:** {counts['sets_active']}\n"
-                f"**Titles:** {counts['titles_active']}\n"
-                f"**Profile Emojis:** {counts['profile_emojis_active']}"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="Rarity",
-            value=(
-                f"**Total:** {rarity_total}/100\n"
-                f"**Common:** {rarity.get('common_chance', 'N/A')}\n"
-                f"**Rare:** {rarity.get('rare_chance', 'N/A')}\n"
-                f"**Epic:** {rarity.get('epic_chance', 'N/A')}\n"
-                f"**Legendary:** {rarity.get('legendary_chance', 'N/A')}"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="Economy & Crates",
-            value=(
-                f"**Daily:** {economy.get('daily_min', 'N/A')} - {economy.get('daily_max', 'N/A')} Sancs\n"
-                f"**Weekly:** {economy.get('weekly_min', 'N/A')} - {economy.get('weekly_max', 'N/A')} Sancs\n"
-                f"**Regular Crate:** {crate.get('regular_crate_min', 'N/A')} - {crate.get('regular_crate_max', 'N/A')} Sancs\n"
-                f"**Legendary Crate:** {crate.get('legendary_crate_min', 'N/A')} - {crate.get('legendary_crate_max', 'N/A')} Sancs"
-            ),
-            inline=False
-        )
-
-        embed.add_field(
-            name="Event",
-            value=(
-                f"**Name:** {event.get('event_name', 'No Event')}\n"
-                f"**Theme:** {event.get('event_theme', 'None')}\n"
-                f"**Launched:** {format_on_off(event.get('event_launched', False))}\n"
+                f"**Auto Drops:** {format_on_off(drop.get('auto_drop_enabled', True))}\n"
+                f"**Event Launched:** {format_on_off(event.get('event_launched', False))}\n"
                 f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\n"
-                f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\n"
-                f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
+                f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}"
             ),
             inline=False
         )
@@ -7757,6 +7679,42 @@ async def givecard(interaction: discord.Interaction, user: discord.Member, card:
     )
 
     await interaction.followup.send(embed=embed, ephemeral=True) if interaction.response.is_done() else await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="setadminrole", description="Admin only: set the bot admin role for this server.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(role="Bot admin role")
+async def setadminrole(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only server administrators can set admin roles.", ephemeral=True)
+
+    await set_admin_role_db(interaction.guild.id, role.id)
+
+    await send_staff_log(
+        interaction.guild,
+        "Admin Role Updated",
+        f"**Role:** {role.mention}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(f"Admin role set to {role.mention}.", ephemeral=True)
+
+@bot.tree.command(name="setmodrole", description="Admin only: set the moderator role for this server.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(role="Moderator role")
+async def setmodrole(interaction: discord.Interaction, role: discord.Role):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only server administrators can set moderator roles.", ephemeral=True)
+
+    await set_mod_role_db(interaction.guild.id, role.id)
+
+    await send_staff_log(
+        interaction.guild,
+        "Mod Role Updated",
+        f"**Role:** {role.mention}\n**Updated by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.response.send_message(f"Mod role set to {role.mention}.", ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
