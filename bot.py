@@ -3797,6 +3797,21 @@ async def build_bot_status_lines(guild_id):
         drop_settings = {}
 
     try:
+        rarity_settings = await get_rarity_settings(guild_id)
+    except Exception:
+        rarity_settings = {}
+
+    try:
+        economy_settings = await get_economy_settings(guild_id)
+    except Exception:
+        economy_settings = {}
+
+    try:
+        crate_settings = await get_crate_settings(guild_id)
+    except Exception:
+        crate_settings = {}
+
+    try:
         event_settings = await get_event_settings(guild_id)
     except Exception:
         event_settings = {}
@@ -3806,27 +3821,84 @@ async def build_bot_status_lines(guild_id):
     except Exception:
         collection_settings = {}
 
-    staff_log = "Not set"
-    ticket_channel = "Not set"
+    guild = bot.get_guild(guild_id)
+
+    def channel_display(channel_id):
+        if not channel_id:
+            return "Not set"
+        return f"<#{channel_id}>"
+
+    def role_display(role_id):
+        if not role_id:
+            return "Not set"
+        return f"<@&{role_id}>"
+
+    staff_role = (
+        drop_settings.get("staff_role_id")
+        or drop_settings.get("staff_role")
+        or drop_settings.get("staff_roleid")
+    )
+
+    mod_role = (
+        drop_settings.get("mod_role_id")
+        or drop_settings.get("moderator_role_id")
+        or drop_settings.get("mod_role")
+    )
+
+    admin_role = (
+        drop_settings.get("admin_role_id")
+        or drop_settings.get("admin_role")
+    )
+
+    drop_channels_text = "Not set"
 
     try:
-        if drop_settings.get("staff_log_channel_id"):
-            staff_log = f"<#{drop_settings['staff_log_channel_id']}>"
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT channel_id FROM drop_channels WHERE guild_id=$1 ORDER BY channel_id",
+                guild_id
+            )
+
+        if rows:
+            drop_channels_text = ", ".join(f"<#{row['channel_id']}>" for row in rows[:10])
+            if len(rows) > 10:
+                drop_channels_text += f" +{len(rows) - 10} more"
     except Exception:
         pass
 
-    try:
-        if collection_settings.get("ticket_channel_id"):
-            ticket_channel = f"<#{collection_settings['ticket_channel_id']}>"
-    except Exception:
-        pass
+    rarity_total = (
+        int(rarity_settings.get("common_chance", 0))
+        + int(rarity_settings.get("rare_chance", 0))
+        + int(rarity_settings.get("epic_chance", 0))
+        + int(rarity_settings.get("legendary_chance", 0))
+    )
 
     return (
         f"**Bot:** Online\n"
-        f"**Staff Log:** {staff_log}\n"
-        f"**Ticket Channel:** {ticket_channel}\n"
+        f"**Staff Role:** {role_display(staff_role)}\n"
+        f"**Mod Role:** {role_display(mod_role)}\n"
+        f"**Admin Role:** {role_display(admin_role)}\n"
+        f"**Staff Log:** {channel_display(drop_settings.get('staff_log_channel_id'))}\n"
+        f"**Ticket Channel:** {channel_display(collection_settings.get('ticket_channel_id'))}\n"
+        f"**Drop Channels:** {drop_channels_text}\n\n"
+        f"**Auto Drops:** Every {drop_settings.get('auto_drop_minutes', 'N/A')} minutes\n"
+        f"**Drop Chance:** {drop_settings.get('auto_drop_chance', 'N/A')}%\n"
+        f"**Claim Cooldown:** {drop_settings.get('claim_cooldown_seconds', 'N/A')} seconds\n\n"
+        f"**Rarity Total:** {rarity_total}/100\n"
+        f"**Common/Rare/Epic/Legendary:** "
+        f"{rarity_settings.get('common_chance', 'N/A')}/"
+        f"{rarity_settings.get('rare_chance', 'N/A')}/"
+        f"{rarity_settings.get('epic_chance', 'N/A')}/"
+        f"{rarity_settings.get('legendary_chance', 'N/A')}\n\n"
+        f"**Daily:** {economy_settings.get('daily_min', 'N/A')} - {economy_settings.get('daily_max', 'N/A')} Sancs\n"
+        f"**Weekly:** {economy_settings.get('weekly_min', 'N/A')} - {economy_settings.get('weekly_max', 'N/A')} Sancs\n"
+        f"**Regular Crate:** {crate_settings.get('regular_crate_min', 'N/A')} - {crate_settings.get('regular_crate_max', 'N/A')} Sancs\n"
+        f"**Legendary Crate:** {crate_settings.get('legendary_crate_min', 'N/A')} - {crate_settings.get('legendary_crate_max', 'N/A')} Sancs\n\n"
         f"**Event:** {event_settings.get('event_name', 'No Event')}\n"
+        f"**Theme:** {event_settings.get('event_theme', 'None')}\n"
+        f"**Launched:** {format_on_off(event_settings.get('event_launched', False))}\n"
         f"**Event Drops:** {format_on_off(event_settings.get('event_only_drops', False))}\n"
+        f"**Event Boosts:** {format_on_off(event_settings.get('event_boosts_enabled', False))}\n"
         f"**Event Card Chance:** {event_settings.get('event_card_chance', 10)}%"
     )
 
