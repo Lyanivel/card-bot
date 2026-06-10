@@ -4971,7 +4971,8 @@ async def notify_completed_sets(interaction, user_id):
                 await interaction.response.send_message(message, ephemeral=True)
         except Exception:
             try:
-                await interaction.followup.send(message, ephemeral=True)
+                user = interaction.guild.get_member(user_id) or await interaction.guild.fetch_member(user_id)
+                await user.send(message)
             except Exception:
                 pass
 
@@ -5595,6 +5596,7 @@ async def opencrate(interaction: discord.Interaction, crate_type: app_commands.C
 
     selected_card = await choose_drop_card(cards, interaction.guild.id if interaction.guild else None)
     await add_card_to_inventory(interaction.user.id, selected_card["id"])
+    await notify_completed_sets(interaction, interaction.user.id)
     await add_balance(interaction.user.id, sancs_amount)
 
     bonus_card_text = ""
@@ -5605,6 +5607,7 @@ async def opencrate(interaction: discord.Interaction, crate_type: app_commands.C
         if random.randint(1, 100) <= bonus_chance:
             bonus_card = await choose_card_from_pool(cards, interaction.guild.id if interaction.guild else None)
             await add_card_to_inventory(interaction.user.id, bonus_card["id"])
+            await notify_completed_sets(interaction, interaction.user.id)
             bonus_card_text = f"\n{BULLET_EMOJI} Bonus card: **{bonus_card['name']}** (**ID:** `{bonus_card['id']}`)"
 
     crate_message = random.choice(LOOT_CRATE_OPEN_MESSAGES)
@@ -6966,10 +6969,12 @@ async def viewset(interaction: discord.Interaction, set_name: str):
         card_text = "No cards have been added to this set yet."
     else:
         lines = []
+
         for card in cards:
             owned = await user_owns_card(interaction.user.id, card["id"])
-            marker = "♥" if owned else "♡"
+            marker = "<:Heart:1514038992754241536>" if owned else "♡"
             lines.append(f"{marker} {card['name']}")
+
         card_text = "\n".join(lines)
 
     embed = discord.Embed(
@@ -7194,7 +7199,7 @@ class SettingsFieldSelect(discord.ui.Select):
 
         await interaction.response.edit_message(
             embed=embed,
-            view=SettingsValueView(self.section, field)
+            view=SettingsEditValueView(self.section, field)
         )
 
 class SettingsValueSelect(discord.ui.Select):
@@ -7256,7 +7261,7 @@ class SettingsPanelView(discord.ui.View):
         if section in SETTING_OPTIONS:
             self.add_item(SettingsFieldSelect(section))
 
-class SettingsValueView(discord.ui.View):
+class SettingsEditValueView(discord.ui.View):
     def __init__(self, section, field):
         super().__init__(timeout=300)
         self.add_item(SettingsBackButton(section))
@@ -7269,6 +7274,45 @@ async def settings(interaction: discord.Interaction):
         return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
 
     await interaction.response.send_message(embed=await create_settings_embed(interaction.guild.id, "status"), view=SettingsPanelView("status"), ephemeral=True)
+
+@bot.tree.command(name="hideset", description="Admin only: hide a collection set from users.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.autocomplete(set_name=card_set_autocomplete)
+async def hideset(interaction: discord.Interaction, set_name: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
+    card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
+
+    if not card_set:
+        return await interaction.response.send_message("Set not found.", ephemeral=True)
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE card_sets SET is_active=FALSE WHERE guild_id=$1 AND id=$2",
+            interaction.guild.id,
+            card_set["id"]
+        )
+
+    await interaction.response.send_message(f"Hidden **{card_set['name']}**.", ephemeral=True)
+
+@bot.tree.command(name="showset", description="Admin only: show a hidden collection set again.")
+@app_commands.default_permissions(administrator=True)
+async def showset(interaction: discord.Interaction, set_name: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE card_sets SET is_active=TRUE WHERE guild_id=$1 AND LOWER(name)=LOWER($2) RETURNING *",
+            interaction.guild.id,
+            set_name
+        )
+
+    if not row:
+        return await interaction.response.send_message("Hidden set not found.", ephemeral=True)
+
+    await interaction.response.send_message(f"Restored **{row['name']}**.", ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
