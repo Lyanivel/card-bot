@@ -2798,7 +2798,6 @@ class TradeView(discord.ui.View):
         )
         return embed
 
-
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.target.id:
             await interaction.response.send_message(
