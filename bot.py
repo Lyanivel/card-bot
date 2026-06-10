@@ -2709,11 +2709,11 @@ class TradeView(discord.ui.View):
 
     def completed_embed(self):
         embed = discord.Embed(
-            title="<:Accept:1514062817815171175> Trade Accepted",
+            title="<:Accept:1514062817815171175> 𝗧𝗥𝗔𝗗𝗘 𝗔𝗖𝗖𝗘𝗣𝗧𝗘𝗗",
             description=(
-                f"**{self.requester.display_name}** traded:\n"
+                f"**{self.requester.display_name}** gave:\n"
                 f"{trade_card_display(self.your_card)}\n\n"
-                f"**{self.target.display_name}** traded:\n"
+                f"**{self.target.display_name}** gave:\n"
                 f"{trade_card_display(self.their_card)}"
             ),
             color=discord.Color.green()
@@ -2724,9 +2724,9 @@ class TradeView(discord.ui.View):
     
     def declined_embed(self):
         embed = discord.Embed(
-            title="<:Decline:1514062765956927618> Trade Declined",
+            title="<:Decline:1514062765956927618> 𝗧𝗥𝗔𝗗𝗘 𝗗𝗘𝗖𝗟𝗜𝗡𝗘𝗗",
             description=(
-                f"**{self.target.display_name}** declined the trade request.\n\n"
+                f"**{self.target.display_name}** declined this trade.\n\n"
                 f"**Offered:**\n{trade_card_display(self.your_card)}\n\n"
                 f"**Requested:**\n{trade_card_display(self.their_card)}"
             ),
@@ -3790,6 +3790,46 @@ async def create_staff_settings_embed(guild_id):
 
     return embed
 
+async def build_bot_status_lines(guild_id):
+    try:
+        drop_settings = await get_drop_settings(guild_id)
+    except Exception:
+        drop_settings = {}
+
+    try:
+        event_settings = await get_event_settings(guild_id)
+    except Exception:
+        event_settings = {}
+
+    try:
+        collection_settings = await get_collection_settings(guild_id)
+    except Exception:
+        collection_settings = {}
+
+    staff_log = "Not set"
+    ticket_channel = "Not set"
+
+    try:
+        if drop_settings.get("staff_log_channel_id"):
+            staff_log = f"<#{drop_settings['staff_log_channel_id']}>"
+    except Exception:
+        pass
+
+    try:
+        if collection_settings.get("ticket_channel_id"):
+            ticket_channel = f"<#{collection_settings['ticket_channel_id']}>"
+    except Exception:
+        pass
+
+    return (
+        f"**Bot:** Online\n"
+        f"**Staff Log:** {staff_log}\n"
+        f"**Ticket Channel:** {ticket_channel}\n"
+        f"**Event:** {event_settings.get('event_name', 'No Event')}\n"
+        f"**Event Drops:** {format_on_off(event_settings.get('event_only_drops', False))}\n"
+        f"**Event Card Chance:** {event_settings.get('event_card_chance', 10)}%"
+    )
+
 async def create_settings_embed(guild_id, section="status"):
     snapshot = await get_settings_snapshot(guild_id)
     titles = {
@@ -3809,6 +3849,11 @@ async def create_settings_embed(guild_id, section="status"):
 
     if section == "status":
         embed.description = "Use the dropdown to view each section."
+        embed.add_field(
+            name="Bot Status",
+            value=await build_bot_status_lines(guild_id),
+            inline=False
+        )
         embed.add_field(
             name="Drops",
             value=(
@@ -5794,6 +5839,7 @@ async def cardinventory(interaction: discord.Interaction, user: discord.Member =
 
 async def user_cards_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
+
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
@@ -5802,44 +5848,56 @@ async def user_cards_autocomplete(interaction: discord.Interaction, current: str
             WHERE inventory.user_id=$1
             ORDER BY cards.id
         """, interaction.user.id)
+
     choices = []
+
     for card in rows:
         label = plain_card_label(card)
+
         if current and current not in label.lower() and current not in str(card["id"]):
             continue
+
         choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
+
         if len(choices) >= 25:
             break
+
     return choices
 
 async def all_cards_autocomplete(interaction: discord.Interaction, current: str):
     current = current.lower()
-    target_user_id = None
+
     try:
-        target = getattr(interaction.namespace, "user", None) or getattr(interaction.namespace, "member", None) or getattr(interaction.namespace, "target", None)
-        if target:
-            target_user_id = target.id
+        target = getattr(interaction.namespace, "user", None)
+        target_user_id = target.id if target else None
     except Exception:
         target_user_id = None
+
+    if not target_user_id:
+        return []
+
     async with db_pool.acquire() as conn:
-        if target_user_id:
-            rows = await conn.fetch("""
-                SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
-                FROM inventory
-                JOIN cards ON cards.id = inventory.card_id
-                WHERE inventory.user_id=$1
-                ORDER BY cards.id
-            """, target_user_id)
-        else:
-            rows = await conn.fetch("SELECT id, name, rarity, custom_type FROM cards ORDER BY id")
+        rows = await conn.fetch("""
+            SELECT DISTINCT cards.id, cards.name, cards.rarity, cards.custom_type
+            FROM inventory
+            JOIN cards ON cards.id = inventory.card_id
+            WHERE inventory.user_id=$1
+            ORDER BY cards.id
+        """, target_user_id)
+
     choices = []
+
     for card in rows:
         label = plain_card_label(card)
+
         if current and current not in label.lower() and current not in str(card["id"]):
             continue
+
         choices.append(app_commands.Choice(name=label[:100], value=str(card["id"])))
+
         if len(choices) >= 25:
             break
+
     return choices
 
 @bot.tree.command(name="trade", description="Trade one card with another user.")
@@ -6592,7 +6650,7 @@ def create_staff_help_embed(section="staff"):
                 "`/setstafflog` - set the staff log channel.\n"
                 "`/adddropchannel` - add a drop channel.\n"
                 "`/removedropchannel` - remove a drop channel.\n"
-                "`/botstatus` - view bot setup/status."
+                "`/settings` - view bot setup/status."
             ),
             inline=False
         )
@@ -6693,85 +6751,6 @@ async def setstafflogchannel(interaction: discord.Interaction, channel: discord.
         f"Staff log channel set by {interaction.user.mention}.",
         discord.Color.from_str("#9e659d")
     )
-
-@bot.tree.command(name="botstatus", description="Staff only: view bot settings and status.")
-@app_commands.default_permissions(manage_messages=True)
-async def botstatus(interaction: discord.Interaction):
-    if not await is_staff_member(interaction):
-        return await interaction.response.send_message("No permission.", ephemeral=True)
-
-    drop_settings = await get_drop_settings(interaction.guild.id)
-    economy_settings = await get_economy_settings(interaction.guild.id)
-    crate_settings = await get_crate_settings(interaction.guild.id)
-    snipe_settings = await get_snipe_settings(interaction.guild.id)
-    event_settings = await get_event_settings(interaction.guild.id)
-    drop_channels = await get_drop_channels_db(interaction.guild.id)
-    staff_role_id = await get_staff_role(interaction.guild.id)
-    staff_log_channel_id = await get_staff_log_channel(interaction.guild.id)
-
-    channel_text = "None set" if not drop_channels else ", ".join([f"<#{channel_id}>" for channel_id in drop_channels])
-    staff_role_text = f"<@&{staff_role_id}>" if staff_role_id else "Not set"
-    staff_log_text = f"<#{staff_log_channel_id}>" if staff_log_channel_id else "Not set"
-
-    embed = discord.Embed(
-        title="Bot Status",
-        description="Current Sanction bot setup and settings.",
-        color=discord.Color.from_str("#9e659d")
-    )
-
-    embed.add_field(
-        name="Setup",
-        value=(
-            f"**Staff Role:** {staff_role_text}\n"
-            f"**Staff Log:** {staff_log_text}\n"
-            f"**Drop Channels:** {channel_text}"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Drops",
-        value=(
-            f"**Auto Drops:** {format_on_off(drop_settings['auto_drop_enabled'])}\n"
-            f"**Interval:** {int(drop_settings['auto_drop_minutes'])} minutes\n"
-            f"**Chance:** {int(drop_settings['auto_drop_chance'])}%\n"
-            f"**Claim Cooldown:** {int(drop_settings['claim_cooldown_seconds'])} seconds"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Economy",
-        value=(
-            f"**Daily:** {int(economy_settings['daily_min']):,} - {int(economy_settings['daily_max']):,} Sancs\n"
-            f"**Weekly:** {int(economy_settings['weekly_min']):,} - {int(economy_settings['weekly_max']):,} Sancs"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Event",
-        value=(
-            f"**Name:** {event_settings['event_name']}\n"
-            f"**Theme:** {event_settings['event_theme']}\n"
-            f"**Type:** {event_settings['event_type']}\n"
-            f"**Launched:** {format_on_off(event_settings['event_launched'])}"
-        ),
-        inline=False
-    )
-
-    embed.add_field(
-        name="Crates / Snipe",
-        value=(
-            f"**Regular Crate:** {int(crate_settings['regular_crate_min']):,} - {int(crate_settings['regular_crate_max']):,} Sancs\n"
-            f"**Legendary Crate:** {int(crate_settings['legendary_crate_min']):,} - {int(crate_settings['legendary_crate_max']):,} Sancs\n"
-            f"**Staff Sniping:** {format_on_off(snipe_settings['staff_snipe_enabled'])}\n"
-            f"**Snipe Cooldown:** {int(snipe_settings['snipe_cooldown_seconds']) // 60} minutes"
-        ),
-        inline=False
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="resetuser", description="Admin only: reset one user's bot data.")
 @app_commands.default_permissions(administrator=True)
@@ -7306,6 +7285,117 @@ async def showset(interaction: discord.Interaction, set_name: str):
         return await interaction.response.send_message("Hidden set not found.", ephemeral=True)
 
     await interaction.response.send_message(f"Restored **{row['name']}**.", ephemeral=True)
+
+class BurnCardConfirmView(discord.ui.View):
+    def __init__(self, card_id, card_name, admin_id):
+        super().__init__(timeout=60)
+        self.card_id = int(card_id)
+        self.card_name = card_name
+        self.admin_id = admin_id
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("Only the admin who started this burn can confirm it.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Burn Card Forever", style=discord.ButtonStyle.danger)
+    async def confirm_burn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                for query in [
+                    "DELETE FROM inventory WHERE card_id=$1",
+                    "DELETE FROM card_set_cards WHERE card_id=$1",
+                    "DELETE FROM active_trades WHERE your_card_id=$1 OR their_card_id=$1",
+                ]:
+                    try:
+                        await conn.execute(query, self.card_id)
+                    except Exception:
+                        pass
+
+                await conn.execute("DELETE FROM cards WHERE id=$1", self.card_id)
+
+        await send_staff_log(
+            interaction.guild,
+            "Card Burned",
+            f"**Card:** {self.card_name} (`{self.card_id}`)\n**Burned by:** {interaction.user.mention}\nThis removed the card from all inventories and bot data.",
+            discord.Color.red()
+        )
+
+        embed = discord.Embed(
+            title="🔥 Card Burned",
+            description=f"**{self.card_name}** has been permanently burned from all bot data.",
+            color=discord.Color.red()
+        )
+
+        await interaction.response.edit_message(embed=embed, view=None)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel_burn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Burn cancelled.", embed=None, view=None)
+
+@bot.tree.command(name="burncard", description="Admin only: permanently delete a card from all bot data.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.autocomplete(card=active_card_autocomplete)
+async def burncard(interaction: discord.Interaction, card: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
+    card_row = await get_card_by_ref(card)
+
+    if not card_row:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+
+    embed = discord.Embed(
+        title="⚠️ Confirm Card Burn",
+        description=(
+            f"You are about to permanently burn **{card_row['name']}** (`{card_row['id']}`).\n\n"
+            "**This will remove it from:**\n"
+            "• all user inventories\n"
+            "• all sets\n"
+            "• all future drops\n"
+            "• bot card data\n\n"
+            "This cannot be undone."
+        ),
+        color=discord.Color.red()
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=BurnCardConfirmView(card_row["id"], card_row["name"], interaction.user.id),
+        ephemeral=True
+    )
+
+@bot.tree.command(name="givecard", description="Admin only: give a card directly to a user.")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(user="User receiving the card", card="Card to give")
+@app_commands.autocomplete(card=active_card_autocomplete)
+async def givecard(interaction: discord.Interaction, user: discord.Member, card: str):
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("Only administrators can use this command.", ephemeral=True)
+
+    card_row = await get_card_by_ref(card)
+
+    if not card_row:
+        return await interaction.response.send_message("Card not found.", ephemeral=True)
+
+    await add_card_to_inventory(user.id, card_row["id"])
+    await notify_completed_sets(interaction, user.id)
+
+    await send_staff_log(
+        interaction.guild,
+        "Card Given",
+        f"**User:** {user.mention}\n**Card:** {card_row['name']} (`{card_row['id']}`)\n**Given by:** {interaction.user.mention}",
+        discord.Color.from_str("#9e659d")
+    )
+
+    embed = discord.Embed(
+        title="Card Given",
+        description=f"Gave **{card_row['name']}** to {user.mention}.",
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    await interaction.followup.send(embed=embed, ephemeral=True) if interaction.response.is_done() else await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
