@@ -7259,31 +7259,223 @@ async def create_settings_embed(guild_id, section="status"):
         "events": "Event Settings",
         "collections": "Collection Settings",
     }
-    embed = discord.Embed(title=titles.get(section, "Settings"), color=discord.Color.from_str("#9e659d"))
+
+    embed = discord.Embed(
+        title=titles.get(section, "Settings"),
+        color=discord.Color.from_str("#9e659d")
+    )
 
     if section == "status":
         embed.description = "Use the dropdown to view each section."
-        embed.add_field(name="Drops", value=f"**Interval:** {snapshot['drop']['auto_drop_minutes']} minutes\n**Chance:** {snapshot['drop']['auto_drop_chance']}%\n**Cooldown:** {snapshot['drop']['claim_cooldown_seconds']} seconds", inline=False)
-        embed.add_field(name="Rarity", value=f"**Common:** {snapshot['rarity']['common_chance']}\n**Rare:** {snapshot['rarity']['rare_chance']}\n**Epic:** {snapshot['rarity']['epic_chance']}\n**Legendary:** {snapshot['rarity']['legendary_chance']}", inline=False)
+
+        # Pull the full live dashboard directly here so the active settings command shows everything.
+        try:
+            drop = await get_drop_settings(guild_id)
+        except Exception:
+            drop = {}
+
+        try:
+            rarity = await get_rarity_settings(guild_id)
+        except Exception:
+            rarity = {}
+
+        try:
+            economy = await get_economy_settings(guild_id)
+        except Exception:
+            economy = {}
+
+        try:
+            crate = await get_crate_settings(guild_id)
+        except Exception:
+            crate = {}
+
+        try:
+            event = await get_event_settings(guild_id)
+        except Exception:
+            event = {}
+
+        try:
+            collection = await get_collection_settings(guild_id)
+        except Exception:
+            collection = {}
+
+        counts = {
+            "cards_total": 0,
+            "cards_active": 0,
+            "event_cards": 0,
+            "sets_active": 0,
+            "titles_active": 0,
+            "profile_emojis_active": 0,
+            "drop_channels": 0,
+        }
+        drop_channels = []
+
+        try:
+            async with db_pool.acquire() as conn:
+                for key, query in [
+                    ("cards_total", "SELECT COUNT(*) FROM cards"),
+                    ("cards_active", "SELECT COUNT(*) FROM cards WHERE is_active=TRUE"),
+                    ("event_cards", "SELECT COUNT(*) FROM cards WHERE is_event_card=TRUE"),
+                    ("sets_active", "SELECT COUNT(*) FROM card_sets WHERE guild_id=$1 AND is_active=TRUE"),
+                    ("titles_active", "SELECT COUNT(*) FROM shop_titles WHERE is_active=TRUE"),
+                    ("profile_emojis_active", "SELECT COUNT(*) FROM profile_emojis WHERE is_active=TRUE"),
+                ]:
+                    try:
+                        if "$1" in query:
+                            counts[key] = await conn.fetchval(query, guild_id) or 0
+                        else:
+                            counts[key] = await conn.fetchval(query) or 0
+                    except Exception:
+                        counts[key] = 0
+
+                try:
+                    rows = await conn.fetch(
+                        "SELECT channel_id FROM drop_channels WHERE guild_id=$1 ORDER BY channel_id",
+                        guild_id
+                    )
+                    drop_channels = [row["channel_id"] for row in rows]
+                    counts["drop_channels"] = len(drop_channels)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        def channel_text(channel_id):
+            return f"<#{channel_id}>" if channel_id else "Not set"
+
+        def role_text(role_id):
+            return f"<@&{role_id}>" if role_id else "Not set"
+
+        staff_role = drop.get("staff_role_id") or drop.get("staff_role") or drop.get("staff_roleid")
+        mod_role = drop.get("mod_role_id") or drop.get("moderator_role_id") or drop.get("mod_role")
+        admin_role = drop.get("admin_role_id") or drop.get("admin_role")
+
+        if drop_channels:
+            drop_channel_text = ", ".join(f"<#{channel_id}>" for channel_id in drop_channels[:8])
+            if len(drop_channels) > 8:
+                drop_channel_text += f" +{len(drop_channels) - 8} more"
+        else:
+            drop_channel_text = "Not set"
+
+        rarity_total = (
+            int(rarity.get("common_chance", 0))
+            + int(rarity.get("rare_chance", 0))
+            + int(rarity.get("epic_chance", 0))
+            + int(rarity.get("legendary_chance", 0))
+        )
+
+        embed.add_field(
+            name="Roles",
+            value=(
+                f"**Admin:** {role_text(admin_role)}\n"
+                f"**Mod:** {role_text(mod_role)}\n"
+                f"**Staff:** {role_text(staff_role)}"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="Channels",
+            value=(
+                f"**Staff Log:** {channel_text(drop.get('staff_log_channel_id'))}\n"
+                f"**Ticket:** {channel_text(collection.get('ticket_channel_id'))}\n"
+                f"**Drops:** {drop_channel_text}"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="Drops",
+            value=(
+                f"**Auto Drops:** Every {drop.get('auto_drop_minutes', 'N/A')} minutes\n"
+                f"**Drop Chance:** {drop.get('auto_drop_chance', 'N/A')}%\n"
+                f"**Claim Cooldown:** {drop.get('claim_cooldown_seconds', 'N/A')} seconds"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="Cards & Shop",
+            value=(
+                f"**Cards:** {counts['cards_active']} active / {counts['cards_total']} total\n"
+                f"**Event Cards:** {counts['event_cards']}\n"
+                f"**Active Sets:** {counts['sets_active']}\n"
+                f"**Titles:** {counts['titles_active']}\n"
+                f"**Profile Emojis:** {counts['profile_emojis_active']}"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="Rarity",
+            value=(
+                f"**Total:** {rarity_total}/100\n"
+                f"**Common:** {rarity.get('common_chance', 'N/A')}\n"
+                f"**Rare:** {rarity.get('rare_chance', 'N/A')}\n"
+                f"**Epic:** {rarity.get('epic_chance', 'N/A')}\n"
+                f"**Legendary:** {rarity.get('legendary_chance', 'N/A')}"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="Economy & Crates",
+            value=(
+                f"**Daily:** {economy.get('daily_min', 'N/A')} - {economy.get('daily_max', 'N/A')} Sancs\n"
+                f"**Weekly:** {economy.get('weekly_min', 'N/A')} - {economy.get('weekly_max', 'N/A')} Sancs\n"
+                f"**Regular Crate:** {crate.get('regular_crate_min', 'N/A')} - {crate.get('regular_crate_max', 'N/A')} Sancs\n"
+                f"**Legendary Crate:** {crate.get('legendary_crate_min', 'N/A')} - {crate.get('legendary_crate_max', 'N/A')} Sancs"
+            ),
+            inline=False
+        )
+
+        embed.add_field(
+            name="Event",
+            value=(
+                f"**Name:** {event.get('event_name', 'No Event')}\n"
+                f"**Theme:** {event.get('event_theme', 'None')}\n"
+                f"**Launched:** {format_on_off(event.get('event_launched', False))}\n"
+                f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\n"
+                f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\n"
+                f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
+            ),
+            inline=False
+        )
+
     elif section in SETTING_OPTIONS:
         lines = []
+
         for key, meta in SETTING_OPTIONS[section]["items"].items():
             current = get_setting_current_value(snapshot, key, meta["kind"])
             lines.append(f"**{meta['label']}:** {current}{meta['suffix']}")
+
         embed.description = "\n".join(lines)
+
         if section == "rarity":
             embed.set_footer(text="Common, Rare, Epic, and Legendary should total 100.")
         else:
-            embed.set_footer(text="Use the edit dropdowns below to change these values.")
+            embed.set_footer(text="Use the edit dropdown below to change these values.")
+
     elif section == "events":
         event = snapshot["event"]
-        embed.description = f"**Name:** {event['event_name']}\n**Theme:** {event['event_theme']}\n**Type:** {event['event_type']}\n**Launched:** {format_on_off(event['event_launched'])}\n**Event Drops:** {format_on_off(event['event_only_drops'])}\n**Event Boosts:** {format_on_off(event['event_boosts_enabled'])}"
+        embed.description = (
+            f"**Name:** {event.get('event_name', 'No Event')}\n"
+            f"**Theme:** {event.get('event_theme', 'None')}\n"
+            f"**Type:** {event.get('event_type', 'Seasonal')}\n"
+            f"**Launched:** {format_on_off(event.get('event_launched', False))}\n"
+            f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\n"
+            f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\n"
+            f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
+        )
         embed.set_footer(text="Use /eventsetup for event name/theme/launch controls.")
+
     elif section == "collections":
         collection = snapshot["collection"]
         ticket = f"<#{collection['ticket_channel_id']}>" if collection.get("ticket_channel_id") else "Not set"
-        embed.description = f"**Ticket Channel:** {ticket}\n**Completion Emoji:** {collection.get('completion_emoji') or '🎉'}"
-        embed.set_footer(text="Use /collectionsetup for collection controls.")
+        embed.description = (
+            f"**Ticket Channel:** {ticket}\n"
+            f"**Completion Emoji:** {collection.get('completion_emoji') or '🎉'}"
+        )
 
     return embed
 
