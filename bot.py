@@ -6745,7 +6745,7 @@ def create_member_help_embed(section="main"):
             name="Cards",
             value=(
                 "`/cards` - view obtainable cards.\n"
-                "`/viewcard` - view a card.\n"
+                "`/viewcard` - view a card.\n`/viewsets` - view and inspect collections.\n"
                 "`/cardinventory` - view owned cards.\n"
                 "`/sellcard` - sell a card."
             ),
@@ -6754,8 +6754,8 @@ def create_member_help_embed(section="main"):
         embed.add_field(
             name="Collections",
             value=(
-                "`/cardsets` - view available collections.\n"
-                "`/viewset` - view a collection and your progress.\n"
+                ""
+                ""
                 ""
             ),
             inline=False
@@ -6874,13 +6874,13 @@ def create_staff_help_embed(section="staff"):
         embed.add_field(
             name="Collections",
             value=(
-                "`/collectionsetup` - view collection setup.\n`/setticketchannel` - set the collection reward ticket channel.\n"
+                "`/setticketchannel` - set the collection reward ticket channel.\n"
                 "`/setcompletionemoji` - set the collection complete emoji.\n"
                 "`/createset` - create a collection set.\n"
                 "`/addcardtoset` - add a card to a set.\n"
                 "`/removecardfromset` - remove a card from a set.\n"
-                "`/viewset` - view a set.\n"
-                "`/cardsets` - view all sets.\n"
+                ""
+                ""
                 "`/checksets` - check completed sets."
             ),
             inline=False
@@ -6916,8 +6916,8 @@ def create_staff_help_embed(section="staff"):
             name="Settings",
             value=(
                 "`/settings` - view and edit admin settings.\n"
-                "`/settingsedit` - quickly edit common settings.\n"
-                "`/raritychances` - view rarity weights.\n"
+                ""
+                ""
                 "`/setraritychance` - edit rarity weights."
             ),
             inline=False
@@ -7147,46 +7147,6 @@ async def removecardfromset(interaction: discord.Interaction, set_name: str, car
         await conn.execute("DELETE FROM card_set_cards WHERE set_id=$1 AND card_id=$2", card_set["id"], card_row["id"])
     await send_staff_log(interaction.guild, "Card Removed From Set", f"**Set:** {card_set['name']}\n**Card:** {card_row['name']} (`{card_row['id']}`)\n**Updated by:** {interaction.user.mention}", discord.Color.red())
     await interaction.response.send_message(f"Removed **{card_row['name']}** from **{card_set['name']}**.", ephemeral=True)
-
-@bot.tree.command(name="viewset", description="View a collection set and your progress.")
-@app_commands.autocomplete(set_name=card_set_autocomplete)
-async def viewset(interaction: discord.Interaction, set_name: str):
-    card_set = await get_card_set_by_ref(interaction.guild.id, set_name)
-
-    if not card_set:
-        return await interaction.response.send_message("Set not found.", ephemeral=True)
-
-    cards = await get_cards_in_set(card_set["id"])
-    complete, owned_count, total_count = await user_owns_all_cards_in_set(interaction.user.id, card_set["id"])
-
-    if not cards:
-        card_text = "No cards have been added to this set yet."
-    else:
-        lines = []
-        for card in cards:
-            lines.append(f"{BULLET_EMOJI} {card['name']}")
-        card_text = "\n".join(lines)
-
-    embed = discord.Embed(
-        title=f"{card_set['name']} Collection",
-        description=f"**Progress:** {owned_count}/{total_count}\n\n**Cards**\n{card_text}",
-        color=discord.Color.from_str("#9e659d")
-    )
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="cardsets", description="View available card collection sets.")
-async def cardsets(interaction: discord.Interaction):
-    async with db_pool.acquire() as conn:
-        sets = await conn.fetch("SELECT * FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name", interaction.guild.id)
-    if not sets:
-        return await interaction.response.send_message("No card sets are available right now.", ephemeral=True)
-    lines = []
-    for card_set in sets:
-        complete, owned_count, total_count = await user_owns_all_cards_in_set(interaction.user.id, card_set["id"])
-        status = "✅" if complete else "⬜"
-        lines.append(f"{status} **{card_set['name']}** — {owned_count}/{total_count}")
-    embed = discord.Embed(title="Card Collections", description="\n".join(lines), color=discord.Color.from_str("#9e659d"))
-    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="unequiptitle", description="Remove your currently equipped title.")
 async def unequiptitle(interaction: discord.Interaction):
@@ -7715,6 +7675,141 @@ async def setmodrole(interaction: discord.Interaction, role: discord.Role):
     )
 
     await interaction.response.send_message(f"Mod role set to {role.mention}.", ephemeral=True)
+
+async def build_viewsets_overview_embed(interaction: discord.Interaction, sets):
+    lines = []
+
+    for card_set in sets:
+        complete, owned_count, total_count = await user_owns_all_cards_in_set(
+            interaction.user.id,
+            card_set["id"]
+        )
+        status = "✅" if complete else "⬜"
+        lines.append(f"{status} **{card_set['name']}** — {owned_count}/{total_count}")
+
+    if not lines:
+        description = "No card sets are available right now."
+    else:
+        description = "\n".join(lines)
+
+    embed = discord.Embed(
+        title="Collections",
+        description=description,
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    if lines:
+        embed.set_footer(text="Choose a collection from the dropdown to view its cards.")
+
+    return embed
+
+async def build_single_set_embed(interaction: discord.Interaction, set_id: int):
+    async with db_pool.acquire() as conn:
+        card_set = await conn.fetchrow(
+            "SELECT * FROM card_sets WHERE guild_id=$1 AND id=$2 AND is_active=TRUE",
+            interaction.guild.id,
+            set_id
+        )
+
+    if not card_set:
+        return discord.Embed(
+            title="Collection Not Found",
+            description="That collection is no longer available.",
+            color=discord.Color.red()
+        )
+
+    cards = await get_cards_in_set(card_set["id"])
+    complete, owned_count, total_count = await user_owns_all_cards_in_set(
+        interaction.user.id,
+        card_set["id"]
+    )
+
+    if not cards:
+        card_text = "No cards have been added to this set yet."
+    else:
+        lines = []
+
+        for card in cards:
+            owned = await user_owns_card(interaction.user.id, card["id"])
+            marker = "✅" if owned else "⬜"
+            lines.append(f"{marker} {card['name']}")
+
+        card_text = "\n".join(lines)
+
+    completion_line = "\n**Collection Complete!**" if complete else ""
+
+    return discord.Embed(
+        title=f"{card_set['name']} Collection",
+        description=(
+            f"**Progress:** {owned_count}/{total_count}"
+            f"{completion_line}\n\n"
+            f"**Cards**\n{card_text}"
+        ),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+class ViewSetsSelect(discord.ui.Select):
+    def __init__(self, sets):
+        options = [
+            discord.SelectOption(
+                label=card_set["name"][:100],
+                value=str(card_set["id"]),
+                description="View this collection"
+            )
+            for card_set in sets[:25]
+        ]
+
+        super().__init__(
+            placeholder="Choose a collection to view...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        set_id = int(self.values[0])
+        embed = await build_single_set_embed(interaction, set_id)
+        await interaction.response.edit_message(embed=embed, view=ViewSetsDetailView())
+
+class ViewSetsBackButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="Back", style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction):
+        async with db_pool.acquire() as conn:
+            sets = await conn.fetch(
+                "SELECT * FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name",
+                interaction.guild.id
+            )
+
+        embed = await build_viewsets_overview_embed(interaction, sets)
+        await interaction.response.edit_message(embed=embed, view=ViewSetsOverviewView(sets))
+
+class ViewSetsOverviewView(discord.ui.View):
+    def __init__(self, sets):
+        super().__init__(timeout=180)
+
+        if sets:
+            self.add_item(ViewSetsSelect(sets))
+
+class ViewSetsDetailView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(ViewSetsBackButton())
+
+@bot.tree.command(name="viewsets", description="View collection sets and inspect set progress.")
+async def viewsets(interaction: discord.Interaction):
+    async with db_pool.acquire() as conn:
+        sets = await conn.fetch(
+            "SELECT * FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name",
+            interaction.guild.id
+        )
+
+    if not sets:
+        return await interaction.response.send_message("No card sets are available right now.", ephemeral=True)
+
+    embed = await build_viewsets_overview_embed(interaction, sets)
+    await interaction.response.send_message(embed=embed, view=ViewSetsOverviewView(sets))
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
