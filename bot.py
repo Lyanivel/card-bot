@@ -49,6 +49,8 @@ WEEKLY_OPENED_EMOJI = "<:weeklyopened:1500637809084731443>"
 GIFT_BOX_EMOJI = "<:giftbox:1499565358074560582>"
 LOOT_CRATE_EMOJI = "<:lootcrate:1499544926864802032>"
 LEGENDARY_CRATE_EMOJI = "<:legendarycrate:1499567119233450055>"
+OWNED_SET_EMOJI = "<:Checkmark:1514130364631748629>"
+MISSING_SET_EMOJI = "<:x_:1514130381618675772>"
 BULLET_EMOJI = "<:heartdot:1499885862408818901>"
 TOP_1_EMOJI = "<:1stplace:1499791803086405703>"
 TOP_2_EMOJI = "<:2ndplace:1499791905884471406>"
@@ -7684,7 +7686,7 @@ async def build_viewsets_overview_embed(interaction: discord.Interaction, sets):
             interaction.user.id,
             card_set["id"]
         )
-        status = "✅" if complete else "⬜"
+        status = OWNED_SET_EMOJI if complete else MISSING_SET_EMOJI
         lines.append(f"{status} **{card_set['name']}** — {owned_count}/{total_count}")
 
     if not lines:
@@ -7731,7 +7733,7 @@ async def build_single_set_embed(interaction: discord.Interaction, set_id: int):
 
         for card in cards:
             owned = await user_owns_card(interaction.user.id, card["id"])
-            marker = "✅" if owned else "⬜"
+            marker = OWNED_SET_EMOJI if owned else MISSING_SET_EMOJI
             lines.append(f"{marker} {card['name']}")
 
         card_text = "\n".join(lines)
