@@ -80,8 +80,6 @@ SNIPE_PRICE = 2500
 SNIPE_COOLDOWN = 10 * 60
 SNIPE_MUTE_MINUTES = 5
 MAX_TRADES_PER_DAY = 5
-MAX_GIVECURRENCY_PER_DAY = 25000
-MAX_GIVECURRENCY_PER_TRANSFER = 10000
 
 DAILY_CLAIM_MESSAGES = [
     "You shook the money tree and found {amount} Sancs.",
@@ -179,7 +177,7 @@ SNIPE_FOUND_MESSAGES = [
 ]
 
 EVENT_CARD_LOCKED_MESSAGE = "This event card belongs to a chosen few."
-COLLECTION_COMPLETE_TEXT_TEMPLATE = "{emoji} ᴄᴏɴɢʀᴀᴛᴜʟᴀᴛɪᴏɴs {user_mention}, ᴄᴏʟʟᴇᴄᴛɪᴏɴ ᴄᴏᴍᴘʟᴇᴛᴇ! ʏᴏᴜ ᴄᴏᴍᴘʟᴇᴛᴇᴅ sᴇᴛ {set_name}. ᴘʟᴇᴀsᴇ ᴏᴘᴇɴ ᴀ ᴛɪᴄᴋᴇᴛ ᴛᴏ ᴄʟᴀɪᴍ ʏᴏᴜʀ ʀᴇᴡᴀʀᴅ! {ticket_channel}"
+COLLECTION_COMPLETE_TEXT_TEMPLATE = "Congratulations {user_mention}! {emoji} ᴄᴏʟʟᴇᴄᴛɪᴏɴ ᴄᴏᴍᴘʟᴇᴛᴇ! ʏᴏᴜ ᴄᴏᴍᴘʟᴇᴛᴇᴅ sᴇᴛ {set_name}. ᴘʟᴇᴀsᴇ ᴏᴘᴇɴ ᴀ ᴛɪᴄᴋᴇᴛ ᴛᴏ ᴄʟᴀɪᴍ ʏᴏᴜʀ ʀᴇᴡᴀʀᴅ! {ticket_channel}"
 OWNER_PROTECTION_MESSAGES = [
     "{target} SHOULD have been muted. Discord chose peace instead of violence.",
     "{target} was eliminated spiritually because Discord refused the paperwork.",
@@ -2724,7 +2722,7 @@ class ClaimView(discord.ui.View):
 def create_trade_result_embed(status, requester, target, requester_card, target_card):
     if status == "accepted":
         return discord.Embed(
-            title="<:Accept:1514062817815171175> Trade Accepted",
+            title="<:Accept:1514062817815171175> 𝗧𝗥𝗔𝗗𝗘 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘",
             description=(
                 f"**{requester.display_name}** traded **{requester_card}**\n"
                 f"**{target.display_name}** traded **{target_card}**"
@@ -2733,7 +2731,7 @@ def create_trade_result_embed(status, requester, target, requester_card, target_
         )
 
     return discord.Embed(
-        title="<:Decline:1514062765956927618> Trade Declined",
+        title="<:Decline:1514062765956927618> 𝗧𝗥𝗔𝗗𝗘 𝗗𝗘𝗖𝗟𝗜𝗡𝗘𝗗",
         description=(
             f"**{target.display_name}** declined the trade request.\n\n"
             f"**Offered:** {requester_card}\n"
@@ -2781,32 +2779,26 @@ class TradeView(discord.ui.View):
 
     def completed_embed(self):
         embed = discord.Embed(
-            title="<:Accept:1514062817815171175> 𝗧𝗥𝗔𝗗𝗘 𝗔𝗖𝗖𝗘𝗣𝗧𝗘𝗗",
+            title="<:Accept:1514062817815171175> 𝗧𝗥𝗔𝗗𝗘 𝗖𝗢𝗠𝗣𝗟𝗘𝗧𝗘",
             description=(
-                f"**{self.requester.display_name}** gave:\n"
-                f"{trade_card_display(self.your_card)}\n\n"
-                f"**{self.target.display_name}** gave:\n"
-                f"{trade_card_display(self.their_card)}"
+                f"**{self.requester.display_name} received:**\n"
+                f"{trade_card_display(self.their_card)}\\n\n"
+                f"**{self.target.display_name} received:**\n"
+                f"{trade_card_display(self.your_card)}"
             ),
             color=discord.Color.green()
         )
-        embed.set_footer(text="The cards have been exchanged successfully.")
         return embed
 
-    
     def declined_embed(self):
         embed = discord.Embed(
             title="<:Decline:1514062765956927618> 𝗧𝗥𝗔𝗗𝗘 𝗗𝗘𝗖𝗟𝗜𝗡𝗘𝗗",
-            description=(
-                f"**{self.target.display_name}** declined this trade.\n\n"
-                f"**Offered:**\n{trade_card_display(self.your_card)}\n\n"
-                f"**Requested:**\n{trade_card_display(self.their_card)}"
-            ),
+            description="No cards were exchanged.",
             color=discord.Color.red()
         )
         return embed
 
-    
+
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.target.id:
             await interaction.response.send_message(
@@ -3972,27 +3964,27 @@ async def build_bot_status_lines(guild_id):
     )
 
     return (
-        f"**Bot:** Online\\n"
-        f"**Admin Role:** {format_status_role(admin_role)}\\n"
-        f"**Mod Role:** {format_status_role(mod_role)}\\n"
-        f"**Staff Role:** {format_status_role(staff_role)}\\n"
-        f"**Staff Log:** {format_status_channel(drop.get('staff_log_channel_id'))}\\n"
-        f"**Ticket Channel:** {format_status_channel(collection.get('ticket_channel_id'))}\\n"
-        f"**Drop Channels:** {counts['drop_channels']}\\n"
-        f"**Cards:** {counts['cards_active']} active / {counts['cards_total']} total\\n"
-        f"**Event Cards:** {counts['event_cards']}\\n"
-        f"**Active Sets:** {counts['sets_active']}\\n"
-        f"**Shop Titles:** {counts['titles_active']}\\n"
-        f"**Profile Emojis:** {counts['profile_emojis_active']}\\n"
-        f"**Auto Drops:** {drop.get('auto_drop_minutes', 'N/A')}m at {drop.get('auto_drop_chance', 'N/A')}%\\n"
-        f"**Claim Cooldown:** {drop.get('claim_cooldown_seconds', 'N/A')}s\\n"
-        f"**Rarity Total:** {rarity_total}/100\\n"
-        f"**Economy:** Daily {economy.get('daily_min', 'N/A')}-{economy.get('daily_max', 'N/A')} | Weekly {economy.get('weekly_min', 'N/A')}-{economy.get('weekly_max', 'N/A')}\\n"
-        f"**Crates:** Regular {crate.get('regular_crate_min', 'N/A')}-{crate.get('regular_crate_max', 'N/A')} | Legendary {crate.get('legendary_crate_min', 'N/A')}-{crate.get('legendary_crate_max', 'N/A')}\\n"
-        f"**Event:** {event.get('event_name', 'No Event')} — {event.get('event_theme', 'None')}\\n"
-        f"**Launched:** {format_on_off(event.get('event_launched', False))}\\n"
-        f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\\n"
-        f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\\n"
+        f"**Bot:** Online\n"
+        f"**Admin Role:** {format_status_role(admin_role)}\n"
+        f"**Mod Role:** {format_status_role(mod_role)}\n"
+        f"**Staff Role:** {format_status_role(staff_role)}\n"
+        f"**Staff Log:** {format_status_channel(drop.get('staff_log_channel_id'))}\n"
+        f"**Ticket Channel:** {format_status_channel(collection.get('ticket_channel_id'))}\n"
+        f"**Drop Channels:** {counts['drop_channels']}\n"
+        f"**Cards:** {counts['cards_active']} active / {counts['cards_total']} total\n"
+        f"**Event Cards:** {counts['event_cards']}\n"
+        f"**Active Sets:** {counts['sets_active']}\n"
+        f"**Shop Titles:** {counts['titles_active']}\n"
+        f"**Profile Emojis:** {counts['profile_emojis_active']}\n"
+        f"**Auto Drops:** {drop.get('auto_drop_minutes', 'N/A')}m at {drop.get('auto_drop_chance', 'N/A')}%\n"
+        f"**Claim Cooldown:** {drop.get('claim_cooldown_seconds', 'N/A')}s\n"
+        f"**Rarity Total:** {rarity_total}/100\n"
+        f"**Economy:** Daily {economy.get('daily_min', 'N/A')}-{economy.get('daily_max', 'N/A')} | Weekly {economy.get('weekly_min', 'N/A')}-{economy.get('weekly_max', 'N/A')}\n"
+        f"**Crates:** Regular {crate.get('regular_crate_min', 'N/A')}-{crate.get('regular_crate_max', 'N/A')} | Legendary {crate.get('legendary_crate_min', 'N/A')}-{crate.get('legendary_crate_max', 'N/A')}\n"
+        f"**Event:** {event.get('event_name', 'No Event')} — {event.get('event_theme', 'None')}\n"
+        f"**Launched:** {format_on_off(event.get('event_launched', False))}\n"
+        f"**Event Drops:** {format_on_off(event.get('event_only_drops', False))}\n"
+        f"**Event Boosts:** {format_on_off(event.get('event_boosts_enabled', False))}\n"
         f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
     )
 
@@ -5565,6 +5557,9 @@ async def weekly(interaction: discord.Interaction):
     amount="Amount to add"
 )
 async def addbal(interaction: discord.Interaction, user: discord.Member, amount: int):
+    if not await is_bot_mod_member(interaction.user):
+        return await interaction.response.send_message("Only mods and admins can use this command.", ephemeral=True)
+
     if not await is_staff_member(interaction):
         return await interaction.response.send_message("No permission.", ephemeral=True)
     if amount <= 0:
