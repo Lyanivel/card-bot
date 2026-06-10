@@ -176,6 +176,7 @@ SNIPE_FOUND_MESSAGES = [
 ]
 
 EVENT_CARD_LOCKED_MESSAGE = "This event card belongs to a chosen few."
+COLLECTION_COMPLETE_TEXT_TEMPLATE = "{emoji} ᴄᴏʟʟᴇᴄᴛɪᴏɴ ᴄᴏᴍᴘʟᴇᴛᴇ! ʏᴏᴜ ᴄᴏᴍᴘʟᴇᴛᴇᴅ sᴇᴛ {set_name}. ᴘʟᴇᴀsᴇ ᴏᴘᴇɴ ᴀ ᴛɪᴄᴋᴇᴛ ᴛᴏ ᴄʟᴀɪᴍ ʏᴏᴜʀ ʀᴇᴡᴀʀᴅ! {ticket_channel}"
 OWNER_PROTECTION_MESSAGES = [
     "{target} SHOULD have been muted. Discord chose peace instead of violence.",
     "{target} was eliminated spiritually because Discord refused the paperwork.",
@@ -2036,13 +2037,26 @@ async def add_profile_emoji_to_shop(name, emoji, price):
 async def remove_profile_emoji_from_shop(name):
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow("SELECT id FROM profile_emojis WHERE LOWER(name)=LOWER($1)", name)
+            row = await conn.fetchrow(
+                "SELECT id, emoji FROM profile_emojis WHERE LOWER(name)=LOWER($1)",
+                name
+            )
+
             result = await conn.execute(
                 "UPDATE profile_emojis SET is_active=FALSE WHERE LOWER(name)=LOWER($1)",
                 name
             )
+
             if row:
-                await conn.execute("DELETE FROM user_owned_profile_emojis WHERE profile_emoji_id=$1", row["id"])
+                for query, value in [
+                    ("DELETE FROM user_owned_profile_emojis WHERE profile_emoji_id=$1", row["id"]),
+                    ("DELETE FROM user_custom_emojis WHERE emoji=$1", row["emoji"]),
+                ]:
+                    try:
+                        await conn.execute(query, value)
+                    except Exception:
+                        pass
+
             return result.endswith("1")
 
 async def get_active_profile_emojis():
@@ -2118,8 +2132,16 @@ async def remove_title_from_shop(title):
                 "UPDATE shop_titles SET is_active=FALSE WHERE LOWER(title)=LOWER($1)",
                 title
             )
-            await conn.execute("DELETE FROM user_titles WHERE LOWER(title)=LOWER($1)", title)
-            await conn.execute("DELETE FROM user_owned_titles WHERE LOWER(title)=LOWER($1)", title)
+
+            for query in [
+                "DELETE FROM user_titles WHERE LOWER(title)=LOWER($1)",
+                "DELETE FROM user_owned_titles WHERE LOWER(title)=LOWER($1)"
+            ]:
+                try:
+                    await conn.execute(query, title)
+                except Exception:
+                    pass
+
             return result.endswith("1")
 
 async def get_active_shop_titles():
@@ -2626,6 +2648,27 @@ class ClaimView(discord.ui.View):
         )
 
 # ---------------- TRADE SYSTEM ----------------
+def create_trade_result_embed(status, requester, target, requester_card, target_card):
+    if status == "accepted":
+        return discord.Embed(
+            title="<:Accept:1514062817815171175> Trade Accepted",
+            description=(
+                f"**{requester.display_name}** traded **{requester_card}**\n"
+                f"**{target.display_name}** traded **{target_card}**"
+            ),
+            color=discord.Color.green()
+        )
+
+    return discord.Embed(
+        title="<:Decline:1514062765956927618> Trade Declined",
+        description=(
+            f"**{target.display_name}** declined the trade request.\n\n"
+            f"**Offered:** {requester_card}\n"
+            f"**Requested:** {target_card}"
+        ),
+        color=discord.Color.red()
+    )
+
 class TradeView(discord.ui.View):
     def __init__(self, requester, target, your_card, their_card):
         super().__init__(timeout=120)
@@ -2633,6 +2676,8 @@ class TradeView(discord.ui.View):
         self.target = target
         self.your_card = your_card
         self.their_card = their_card
+        self.your_card_name = str(your_card)
+        self.their_card_name = str(their_card)
         self.finished = False
 
     def clear_active_trade_cards(self):
@@ -3739,8 +3784,82 @@ async def create_staff_settings_embed(guild_id):
 
     return embed
 
-async def create_settings_embed(guild_id):
-    return await create_settings_home_embed(guild_id)
+async def create_settings_embed(guild_id, section="status"):
+    snapshot = await get_settings_snapshot(guild_id)
+    titles = {
+        "status": "Settings Status",
+        "drops": "Drops Settings",
+        "rarity": "Rarity Settings",
+        "economy": "Economy Settings",
+        "crates": "Crate Settings",
+        "events": "Event Settings",
+        "collections": "Collection Settings",
+    }
+
+    embed = discord.Embed(
+        title=titles.get(section, "Settings"),
+        color=discord.Color.from_str("#9e659d")
+    )
+
+    if section == "status":
+        embed.description = "Use the dropdown to view each section."
+        embed.add_field(
+            name="Drops",
+            value=(
+                f"**Interval:** {snapshot['drop']['auto_drop_minutes']} minutes\n"
+                f"**Chance:** {snapshot['drop']['auto_drop_chance']}%\n"
+                f"**Cooldown:** {snapshot['drop']['claim_cooldown_seconds']} seconds"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="Rarity",
+            value=(
+                f"**Common:** {snapshot['rarity']['common_chance']}\n"
+                f"**Rare:** {snapshot['rarity']['rare_chance']}\n"
+                f"**Epic:** {snapshot['rarity']['epic_chance']}\n"
+                f"**Legendary:** {snapshot['rarity']['legendary_chance']}"
+            ),
+            inline=False
+        )
+
+    elif section in SETTING_OPTIONS:
+        lines = []
+
+        for key, meta in SETTING_OPTIONS[section]["items"].items():
+            current = get_setting_current_value(snapshot, key, meta["kind"])
+            lines.append(f"**{meta['label']}:** {current}{meta['suffix']}")
+
+        embed.description = "\n".join(lines)
+
+        if section == "rarity":
+            embed.set_footer(text="Common, Rare, Epic, and Legendary should total 100.")
+        else:
+            embed.set_footer(text="Use the edit dropdown below to change these values.")
+
+    elif section == "events":
+        event = snapshot["event"]
+        embed.description = (
+            f"**Name:** {event['event_name']}\n"
+            f"**Theme:** {event['event_theme']}\n"
+            f"**Type:** {event['event_type']}\n"
+            f"**Launched:** {format_on_off(event['event_launched'])}\n"
+            f"**Event Drops:** {format_on_off(event['event_only_drops'])}\n"
+            f"**Event Boosts:** {format_on_off(event['event_boosts_enabled'])}\n"
+            f"**Event Card Chance:** {event.get('event_card_chance', 10)}%"
+        )
+        embed.set_footer(text="Use /eventsetup for event name/theme/launch controls.")
+
+    elif section == "collections":
+        collection = snapshot["collection"]
+        ticket = f"<#{collection['ticket_channel_id']}>" if collection.get("ticket_channel_id") else "Not set"
+        embed.description = (
+            f"**Ticket Channel:** {ticket}\n"
+            f"**Completion Emoji:** {collection.get('completion_emoji') or '🎉'}"
+        )
+        embed.set_footer(text="Use /collectionsetup for collection controls.")
+
+    return embed
 
 class SnipeCooldownModal(discord.ui.Modal, title="Set Snipe Cooldown"):
     minutes = discord.ui.TextInput(
@@ -4814,37 +4933,45 @@ async def mark_set_completed_once(guild_id, user_id, set_id):
 async def notify_completed_sets(interaction, user_id):
     if not interaction or not interaction.guild:
         return
+
     async with db_pool.acquire() as conn:
         sets = await conn.fetch(
             "SELECT * FROM card_sets WHERE guild_id=$1 AND is_active=TRUE ORDER BY name",
             interaction.guild.id
         )
+
     if not sets:
         return
+
     settings = await get_collection_settings(interaction.guild.id)
-    ticket_text = f"\nOpen a ticket here: <#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "\nOpen a ticket to claim your reward."
+    ticket_channel = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else ""
+    emoji = settings.get("completion_emoji") or "🎉"
+
     for card_set in sets:
         complete, owned_count, total_count = await user_owns_all_cards_in_set(user_id, card_set["id"])
+
         if not complete:
             continue
+
         is_new = await mark_set_completed_once(interaction.guild.id, user_id, card_set["id"])
+
         if not is_new:
             continue
-        emoji = settings.get("completion_emoji") or "🎉"
-        embed = discord.Embed(
-            title=f"{emoji} Collection Complete!",
-            description=(
-                f"<@{user_id}> completed **{card_set['name']}**.\n"
-                f"**Reward:** {card_set['reward_text']}"
-                f"{ticket_text}"
-            ),
-            color=discord.Color.from_str("#9e659d")
-        )
+
+        message = COLLECTION_COMPLETE_TEXT_TEMPLATE.format(
+            emoji=emoji,
+            set_name=card_set["name"],
+            ticket_channel=ticket_channel
+        ).strip()
+
         try:
-            await interaction.channel.send(embed=embed)
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
         except Exception:
             try:
-                await interaction.followup.send(embed=embed)
+                await interaction.followup.send(message, ephemeral=True)
             except Exception:
                 pass
 
@@ -5574,16 +5701,6 @@ async def inventory(interaction: discord.Interaction, user: discord.Member = Non
         description += f"{BULLET_EMOJI} {LEGENDARY_SNIPER_EMOJI} **Legendary Snipers:** {legendary_snipers}\n"
 
     description += f"\n**Active Perks**\n{format_active_boosts(active_boosts)}\n"
-
-    if owned_profile_emojis:
-        description += "\n**Owned Profile Emojis**\n"
-        for owned_emoji in owned_profile_emojis:
-            description += f"{BULLET_EMOJI} {owned_emoji['emoji']} `{owned_emoji['name']}`\n"
-
-    if owned_titles:
-        description += "\n**Owned Titles**\n"
-        for owned_title in owned_titles:
-            description += f"{BULLET_EMOJI} **{owned_title}**\n"
 
     description += "\nUse `/cardinventory` to view cards."
 
@@ -7029,37 +7146,74 @@ class SettingsSectionSelect(discord.ui.Select):
             discord.SelectOption(label="Events", value="events"),
             discord.SelectOption(label="Collections", value="collections"),
         ]
-        super().__init__(placeholder="Choose a settings section...", min_values=1, max_values=1, options=options)
+
+        super().__init__(
+            placeholder="Choose a settings section...",
+            min_values=1,
+            max_values=1,
+            options=options
+        )
 
     async def callback(self, interaction: discord.Interaction):
         section = self.values[0]
-        await interaction.response.edit_message(embed=await create_settings_embed(interaction.guild.id, section), view=SettingsPanelView(section))
+
+        await interaction.response.edit_message(
+            embed=await create_settings_embed(interaction.guild.id, section),
+            view=SettingsPanelView(section)
+        )
 
 class SettingsFieldSelect(discord.ui.Select):
     def __init__(self, section):
         self.section = section
-        options = [discord.SelectOption(label=meta["label"], value=key) for key, meta in SETTING_OPTIONS.get(section, {}).get("items", {}).items()]
-        super().__init__(placeholder="Choose what to edit...", min_values=1, max_values=1, options=options[:25])
+        options = [
+            discord.SelectOption(label=meta["label"], value=key)
+            for key, meta in SETTING_OPTIONS.get(section, {}).get("items", {}).items()
+        ]
+
+        super().__init__(
+            placeholder="Choose what to edit...",
+            min_values=1,
+            max_values=1,
+            options=options[:25]
+        )
 
     async def callback(self, interaction: discord.Interaction):
         field = self.values[0]
         meta = SETTING_OPTIONS[self.section]["items"][field]
+        snapshot = await get_settings_snapshot(interaction.guild.id)
+        current = get_setting_current_value(snapshot, field, meta["kind"])
 
         embed = discord.Embed(
             title=f"Edit {meta['label']}",
-            description="Choose a value below, or press Back to return.",
+            description=(
+                f"**Current:** {current}{meta['suffix']}\n\n"
+                "Choose a new value below, or press Back to return."
+            ),
             color=discord.Color.from_str("#9e659d")
         )
 
-        await interaction.response.edit_message(embed=embed, view=SettingsValueView(self.section, field))
+        await interaction.response.edit_message(
+            embed=embed,
+            view=SettingsValueView(self.section, field)
+        )
 
 class SettingsValueSelect(discord.ui.Select):
     def __init__(self, section, field):
         self.section = section
         self.field = field
         meta = SETTING_OPTIONS[section]["items"][field]
-        options = [discord.SelectOption(label=f"{value}{meta['suffix']}", value=str(value)) for value in meta["values"]]
-        super().__init__(placeholder=f"Choose {meta['label']} value...", min_values=1, max_values=1, options=options[:25])
+
+        options = [
+            discord.SelectOption(label=f"{value}{meta['suffix']}", value=str(value))
+            for value in meta["values"]
+        ]
+
+        super().__init__(
+            placeholder=f"Choose {meta['label']} value...",
+            min_values=1,
+            max_values=1,
+            options=options[:25]
+        )
 
     async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -7067,16 +7221,20 @@ class SettingsValueSelect(discord.ui.Select):
 
         value = int(self.values[0])
         meta = SETTING_OPTIONS[self.section]["items"][self.field]
-        await apply_simple_setting(interaction.guild.id, self.field, meta["kind"], value)
-        await send_staff_log(interaction.guild, "Setting Updated", f"**Setting:** {meta['label']}\n**New value:** {value}{meta['suffix']}\n**Updated by:** {interaction.user.mention}", discord.Color.from_str("#9e659d"))
-        await interaction.response.edit_message(embed=await create_settings_embed(interaction.guild.id, self.section), view=SettingsPanelView(self.section))
 
-class SettingsPanelView(discord.ui.View):
-    def __init__(self, section="status"):
-        super().__init__(timeout=300)
-        self.add_item(SettingsSectionSelect(section))
-        if section in SETTING_OPTIONS:
-            self.add_item(SettingsFieldSelect(section))
+        await apply_simple_setting(interaction.guild.id, self.field, meta["kind"], value)
+
+        await send_staff_log(
+            interaction.guild,
+            "Setting Updated",
+            f"**Setting:** {meta['label']}\n**New value:** {value}{meta['suffix']}\n**Updated by:** {interaction.user.mention}",
+            discord.Color.from_str("#9e659d")
+        )
+
+        await interaction.response.edit_message(
+            embed=await create_settings_embed(interaction.guild.id, self.section),
+            view=SettingsPanelView(self.section)
+        )
 
 class SettingsBackButton(discord.ui.Button):
     def __init__(self, section):
@@ -7088,6 +7246,15 @@ class SettingsBackButton(discord.ui.Button):
             embed=await create_settings_embed(interaction.guild.id, self.section),
             view=SettingsPanelView(self.section)
         )
+
+class SettingsPanelView(discord.ui.View):
+    def __init__(self, section="status"):
+        super().__init__(timeout=300)
+        self.section = section
+        self.add_item(SettingsSectionSelect(section))
+
+        if section in SETTING_OPTIONS:
+            self.add_item(SettingsFieldSelect(section))
 
 class SettingsValueView(discord.ui.View):
     def __init__(self, section, field):
@@ -7102,51 +7269,6 @@ async def settings(interaction: discord.Interaction):
         return await interaction.response.send_message("Only administrators can use settings.", ephemeral=True)
 
     await interaction.response.send_message(embed=await create_settings_embed(interaction.guild.id, "status"), view=SettingsPanelView("status"), ephemeral=True)
-
-class CollectionSetupSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="View Collection Settings", value="view"),
-            discord.SelectOption(label="Ticket Channel Info", value="ticket"),
-            discord.SelectOption(label="Completion Emoji Info", value="emoji"),
-            discord.SelectOption(label="Collection Commands", value="commands"),
-        ]
-        super().__init__(placeholder="Choose a collection setup section...", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        value = self.values[0]
-        settings = await get_collection_settings(interaction.guild.id)
-        ticket = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "Not set"
-        emoji = settings.get("completion_emoji") or "🎉"
-        embed = discord.Embed(title="Collection Setup", color=discord.Color.from_str("#9e659d"))
-
-        if value == "view":
-            embed.description = f"**Ticket Channel:** {ticket}\n**Completion Emoji:** {emoji}"
-        elif value == "ticket":
-            embed.description = f"Use `/setticketchannel` to set the collection reward ticket channel.\n**Current:** {ticket}"
-        elif value == "emoji":
-            embed.description = f"Use `/setcompletionemoji` to change the collection completion emoji.\n**Current:** {emoji}"
-        elif value == "commands":
-            embed.description = "`/createset`\n`/addcardtoset`\n`/removecardfromset`\n`/viewset`\n`/cardsets`"
-
-        await interaction.response.edit_message(embed=embed, view=self.view)
-
-class CollectionSetupView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-        self.add_item(CollectionSetupSelect())
-
-@bot.tree.command(name="collectionsetup", description="Admin only: view collection setup options.")
-@app_commands.default_permissions(administrator=True)
-async def collectionsetup(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message("Only administrators can use collection setup.", ephemeral=True)
-
-    settings = await get_collection_settings(interaction.guild.id)
-    ticket = f"<#{settings['ticket_channel_id']}>" if settings.get("ticket_channel_id") else "Not set"
-    emoji = settings.get("completion_emoji") or "🎉"
-    embed = discord.Embed(title="Collection Setup", description=f"**Ticket Channel:** {ticket}\n**Completion Emoji:** {emoji}\n\nUse the dropdown below to view setup details.", color=discord.Color.from_str("#9e659d"))
-    await interaction.response.send_message(embed=embed, view=CollectionSetupView(), ephemeral=True)
 
 # ---------------- RUN ----------------
 bot.run(TOKEN)
