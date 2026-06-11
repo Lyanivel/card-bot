@@ -5550,7 +5550,7 @@ async def weekly(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="addbal", description="Staff only: add currency to a user's balance.")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.describe(
     user="User to add balance to",
     amount="Amount to add"
