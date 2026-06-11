@@ -7379,8 +7379,9 @@ class SettingsSectionSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
         section = self.values[0]
-        await interaction.response.edit_message(
+        await interaction.edit_original_response(
             embed=await create_settings_embed(interaction.guild.id, section),
             view=SettingsPanelView(section)
         )
@@ -7459,7 +7460,8 @@ class SettingsBackButton(discord.ui.Button):
         self.target_section = target_section
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(
+        await interaction.response.defer()
+        await interaction.edit_original_response(
             embed=await create_settings_embed(interaction.guild.id, self.target_section),
             view=SettingsPanelView(self.target_section)
         )
@@ -7487,7 +7489,12 @@ async def settings(interaction: discord.Interaction):
     if not await is_bot_staff_member(interaction.user):
         return await interaction.response.send_message("Only staff can view settings.", ephemeral=True)
 
-    await interaction.response.send_message(embed=await create_settings_embed(interaction.guild.id, "status"), view=SettingsPanelView("status"), ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+
+    embed = await create_settings_embed(interaction.guild.id, "status")
+    view = SettingsView(interaction.guild.id)
+
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 @bot.tree.command(name="hideset", description="Admin only: hide a collection set from users.")
 @app_commands.default_permissions(administrator=True)
