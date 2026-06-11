@@ -7492,7 +7492,11 @@ async def settings(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     embed = await create_settings_embed(interaction.guild.id, "status")
-    view = SettingsPanelView(interaction.guild.id)
+
+    try:
+        view = SettingsPanelView(interaction.guild.id)
+    except TypeError:
+        view = SettingsPanelView()
 
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
