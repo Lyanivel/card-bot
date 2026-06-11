@@ -7469,6 +7469,8 @@ class SettingsBackButton(discord.ui.Button):
 class SettingsPanelView(discord.ui.View):
     def __init__(self, section="status"):
         super().__init__(timeout=300)
+        if section not in ("status", "drops", "rarity", "economy", "crates", "events", "collections"):
+            section = "status"
         self.section = section
         if section == "status":
             self.add_item(SettingsSectionSelect())
@@ -7494,7 +7496,7 @@ async def settings(interaction: discord.Interaction):
     embed = await create_settings_embed(interaction.guild.id, "status")
 
     try:
-        view = SettingsPanelView(interaction.guild.id)
+        view = SettingsPanelView("status")
     except TypeError:
         view = SettingsPanelView()
 
